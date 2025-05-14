@@ -168,7 +168,7 @@ class Trainer(TrainingOperation):
         ) / len(self._tr.model.layers["output"])
 
         b_ = self._tr.model.layers["distrib"].bias
-        growth_term = torch.reciprocal((out_of_dist - b_).abs() / 2 + 1.0).mean()
+        growth_term = (out_of_dist - b_).square().neg().exp().mean()
 
         loss = main_loss + self._tr.reg_factor * (reg_term + growth_term + flow_term)
         loss_sq = loss**2 / 2 + loss
