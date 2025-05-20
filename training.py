@@ -230,7 +230,7 @@ class Trainer(TrainingOperation):
                         )
 
                     pbar.set_description(
-                        f"Epoch {epoch+1}/{self._tr.epochs} - @ {metrics['factor'] / (d:=i+1):.4f} - Loss: {metrics['loss'] / d:.4f} - Reg: {metrics['factor'] / d:.4f}"
+                        f"Epoch {epoch+1}/{self._tr.epochs} - @ {metrics['factor'] / (d:=i+1):.4f} - Loss: {metrics['loss'] / d:.4f} - Reg: {metrics['reg'] / d:.4f}"
                     )
 
             self.lr_scheduler.step()
