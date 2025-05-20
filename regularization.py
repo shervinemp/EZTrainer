@@ -56,8 +56,8 @@ class ActivationRegularizer:
         self.hooks.append(hook)
 
     def _hook(self, module, input, output):
-        lin_l2_ = output.abs().square().view(output.size(0), -1).mean(dim=1)
-        flow_ = module.weight.abs().sum(dim=1).neg().exp().mean()
+        lin_l2_ = 2 * output.abs().square().view(output.size(0), -1).mean(dim=1)
+        flow_ = module.weight.abs().square().sum(dim=1).neg().exp().mean()
         wgt_log_ = module.weight.abs().add(1).log2().mean()
 
         # x_ = torch.pi * (2 * output.sgn() * output.abs().log2() - 1)

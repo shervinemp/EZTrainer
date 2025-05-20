@@ -89,7 +89,7 @@ def main():
         "--reg_factor",
         type=float,
         default=17e-4,
-        help="Regularization factor (default: 15e-4).",
+        help="Regularization factor (default: 17e-4).",
     )
     parser.add_argument(
         "--sparsity_period",

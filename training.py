@@ -25,7 +25,7 @@ class Training:
     optimizer: torch.optim.Optimizer
     num_epochs: int
     regularizer: callable = ActivationRegularizer
-    reg_factor: float = 175e-5
+    reg_factor: float = 17e-4
     sparsity_period: int = 10
     device: torch.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
