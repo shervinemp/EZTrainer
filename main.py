@@ -94,7 +94,7 @@ def main():
     parser.add_argument(
         "--sparsity_period",
         type=int,
-        default=(v_ := 5),
+        default=(v_ := 6),
         help=f"Sparsity period for regularization (default: {v_}).",
     )
     parser.add_argument(
