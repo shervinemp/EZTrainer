@@ -75,7 +75,8 @@ def _download_and_extract_kaggle_dataset(
         print("Download complete. Extracting files...")
         # Use zipfile to extract the necessary files
         with zipfile.ZipFile(zip_file_name, "r") as zip_ref:
-            for filename in filenames_to_extract:
+            f_ = filenames_to_extract or zip_ref.namelist()
+            for filename in f_:
                 zip_ref.extract(filename)
         print("Extraction complete.")
         os.remove(zip_file_name)  # Clean up the zip file
