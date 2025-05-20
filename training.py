@@ -185,10 +185,6 @@ class Trainer(TrainingOperation):
         task = self._tr.task
         config = task.config
 
-        self.lr_scheduler = torch.optim.lr_scheduler.ExponentialLR(
-            self._tr.optimizer, gamma=0.98
-        )
-
         self.reg_handler = self._tr.regularizer(self._tr.model)
         self.evaluator = Evaluator(self._tr, logger=self.logger)
 
@@ -232,8 +228,6 @@ class Trainer(TrainingOperation):
                     pbar.set_description(
                         f"Epoch {epoch+1}/{self._tr.epochs} - @ {metrics['factor'] / (d:=i+1):.4f} - Loss: {metrics['loss'] / d:.4f} - Reg: {metrics['reg'] / d:.4f}"
                     )
-
-            self.lr_scheduler.step()
 
             if self.logger:
                 self.logger.log_metrics(
