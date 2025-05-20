@@ -88,7 +88,7 @@ def main():
     parser.add_argument(
         "--reg_factor",
         type=float,
-        default=(v_ := 17e-4),
+        default=(v_ := 1732e-6),  # No particular reason but works well
         help=f"Regularization factor (default: {v_}).",
     )
     parser.add_argument(
