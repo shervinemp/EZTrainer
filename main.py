@@ -64,44 +64,44 @@ def main():
     parser.add_argument(
         "--epochs",
         type=int,
-        default=50,
-        help="Number of training epochs (default: 50).",
+        default=(v_ := 50),
+        help=f"Number of training epochs (default: {v_}).",
     )
     parser.add_argument(
         "--hidden_dim",
         type=int,
-        default=512,  # This will be adjusted based on cnn_task and time_series later
-        help="Dimension of the hidden layers (default: 512).",
+        default=(v_ := 512),  # Will be adjusted based on cnn_task and time_series
+        help=f"Dimension of the hidden layers (default: {v_}).",
     )
     parser.add_argument(
         "--n_hidden",
         type=int,
-        default=16,
-        help="Number of hidden layers (default: 16).",
+        default=(v_ := 16),
+        help=f"Number of hidden layers (default: {v_}).",
     )
     parser.add_argument(
         "--lr",
         type=float,
-        default=1e-4,  # This will be adjusted based on time_series later
-        help="Learning rate for the optimizer (default: 1e-4).",
+        default=(v_ := 1e-4),  # Will be adjusted based on time_series
+        help=f"Learning rate for the optimizer (default: {v_}).",
     )
     parser.add_argument(
         "--reg_factor",
         type=float,
-        default=17e-4,
-        help="Regularization factor (default: 17e-4).",
+        default=(v_ := 17e-4),
+        help=f"Regularization factor (default: {v_}).",
     )
     parser.add_argument(
         "--sparsity_period",
         type=int,
-        default=10,
-        help="Sparsity period for regularization (default: 10).",
+        default=(v_ := 5),
+        help=f"Sparsity period for regularization (default: {v_}).",
     )
     parser.add_argument(
         "--batch_size",
         type=int,
-        default=32,
-        help="Batch size for DataLoaders. If not provided, determined by dataset config (default: 32).",
+        default=(v := 32),
+        help=f"Batch size for DataLoaders. If not provided, determined by dataset config (default: {v_}).",
     )
 
     args = parser.parse_args()
