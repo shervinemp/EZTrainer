@@ -172,7 +172,7 @@ def main():
         "criterion": (
             nn.CrossEntropyLoss(reduction="none") if config.classify else nn.MSELoss()
         ),
-        "num_epochs": args.epochs,
+        "epochs": args.epochs,
         "regularizer": partial(ActivationRegularizer, module_type=inner_module),
         "reg_factor": args.reg_factor,
         "sparsity_period": args.sparsity_period,

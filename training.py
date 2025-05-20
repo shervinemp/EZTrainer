@@ -23,10 +23,10 @@ class Training:
     task: Task
     criterion: nn.Module
     optimizer: torch.optim.Optimizer
-    num_epochs: int
+    epochs: int
+    reg_factor: float
+    sparsity_period: int
     regularizer: callable = ActivationRegularizer
-    reg_factor: float = 17e-4
-    sparsity_period: int = 10
     device: torch.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
@@ -199,7 +199,7 @@ class Trainer(TrainingOperation):
         _ = self._tr.criterion.to(self._tr.device)
 
         model.train()
-        for epoch in range(self._tr.num_epochs):
+        for epoch in range(self._tr.epochs):
             self._cosine = None
             metrics = RunningMetrics()
             pbar = tqdm(task.train_loader, total=len(task.train_loader))
@@ -230,7 +230,7 @@ class Trainer(TrainingOperation):
                         )
 
                     pbar.set_description(
-                        f"Epoch {epoch+1}/{self._tr.num_epochs} - @ {metrics['factor'] / (d:=i+1):.4f} - Loss: {metrics['loss'] / d:.4f} - Reg: {metrics['factor'] / d:.4f}"
+                        f"Epoch {epoch+1}/{self._tr.epochs} - @ {metrics['factor'] / (d:=i+1):.4f} - Loss: {metrics['loss'] / d:.4f} - Reg: {metrics['factor'] / d:.4f}"
                     )
 
             self.lr_scheduler.step()
