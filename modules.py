@@ -21,7 +21,7 @@ class Affine(nn.Module):
     Args:
         input_dim (int): The dimension of the input feature space.
         jitter (float, optional): The standard deviation of the random noise
-            applied to weight and bias during training. Defaults to 0.02.
+            applied to weight and bias during training. Defaults to 0.005.
         dtype (torch.dtype, optional): The data type of the module parameters.
             Defaults to torch.float32.
 
@@ -35,7 +35,7 @@ class Affine(nn.Module):
         self,
         input_dim: int,
         *,
-        jitter: float = 0.02,
+        jitter: float = 0.005,
         dtype: torch.dtype = torch.float32,
     ):
         super().__init__()
@@ -125,7 +125,7 @@ class AffineBlock(BaseBlock):
         bias (bool, optional): Whether the inner module should include a bias term.
             Defaults to True.
         jitter (float, optional): Jitter parameter for the Affine layer.
-            Defaults to 0.02.
+            Defaults to 0.005.
         dtype (torch.dtype, optional): Data type for the layers.
             Defaults to torch.float32.
     """
@@ -137,7 +137,7 @@ class AffineBlock(BaseBlock):
         inner_module: nn.Module = nn.Linear,
         bias: bool = True,
         *,
-        jitter: float = 0.02,
+        jitter: float = 0.005,
         dtype: torch.dtype = torch.float32,
     ):
         super().__init__()
@@ -245,7 +245,7 @@ class UnitBlock(BaseBlock):
         activation_params (dict, optional): Additional parameters for the activation
             function. Defaults to None.
         jitter (float, optional): Jitter parameter for the AffineBlock.
-            Defaults to 0.02.
+            Defaults to 0.005.
         dtype (torch.dtype, optional): Data type for the layers.
             Defaults to torch.float32.
     """
@@ -259,7 +259,7 @@ class UnitBlock(BaseBlock):
         activation: nn.Module = torch.tanh,
         *,
         activation_params: dict = None,
-        jitter: float = 0.02,
+        jitter: float = 0.005,
         dtype: torch.dtype = torch.float32,
     ):
         super().__init__()
@@ -329,7 +329,7 @@ class RecurrentBlock(BaseBlock):
         activation_params (dict, optional): Additional parameters for the activation
             function. Defaults to None.
         jitter (float, optional): Jitter parameter for the UnitBlocks.
-            Defaults to 0.02.
+            Defaults to 0.005.
         dtype (torch.dtype, optional): Data type for the layers.
             Defaults to torch.float32.
     """
@@ -344,7 +344,7 @@ class RecurrentBlock(BaseBlock):
         activation: nn.Module = torch.tanh,
         *,
         activation_params: dict = None,
-        jitter: float = 0.02,
+        jitter: float = 0.005,
         dtype: torch.dtype = torch.float32,
     ):
 
