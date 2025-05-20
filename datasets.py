@@ -619,12 +619,10 @@ def load_obesity_classification_dataset() -> (
     Returns:
         tuple: A tuple containing the train, test, and validation datasets, and the task configuration.
     """
-    url = "https://www.kaggle.com/api/v1/datasets/download/sujithmandala/obesity-classification-dataset"
-    response = requests.get(url)
-    response.raise_for_status()
-
-    with open("Obesity Classification.csv", "wb") as f:
-        f.write(response.content)
+    filenames = ["Obesity Classification.csv"]
+    zip_name = "archive.zip"
+    download_url = "https://www.kaggle.com/api/v1/datasets/download/sujithmandala/obesity-classification-dataset"
+    _download_and_extract_kaggle_dataset(download_url, filenames, zip_name)
 
     data = pd.read_csv("Obesity Classification.csv")
     data = data.dropna()
