@@ -100,7 +100,7 @@ def main():
     parser.add_argument(
         "--batch_size",
         type=int,
-        default=(v := 32),
+        default=(v_ := 32),
         help=f"Batch size for DataLoaders. If not provided, determined by dataset config (default: {v_}).",
     )
 
