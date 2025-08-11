@@ -56,17 +56,19 @@ class ActivationRegularizer:
         self.hooks.append(hook)
 
     def _hook(self, module, input, output):
-        lin_l2_ = 2 * output.abs().square().view(output.size(0), -1).mean(dim=1)
+        lin_l2_ = 2 * output.abs().add(1).log2().square().view(output.size(0), -1).mean(
+            dim=1
+        )
         flow_ = module.weight.abs().square().sum(dim=1).neg().exp().mean()
         wgt_log_ = module.weight.abs().add(1).log2().mean()
 
-        # x_ = torch.pi * (2 * output.sgn() * output.abs().log2() - 1)
-        # int_ = self.quantize or (1- (1 - torch.cos(x_)) ** 2 / 4).mean()
+        x_ = torch.pi * (2 * (w := module.weight).sgn() * w.abs().add(0.001).log2() - 1)
+        int_ = self.quantize * (1 - (1 - torch.cos(x_)) ** 2 / 4).mean()
 
         self.energy_term += lin_l2_
         self.flow_term += flow_
         self.sparsity_term += wgt_log_
-        # self.quant_term += int_
+        self.quant_term += int_
 
     def _remove_hooks(self):
         for hook in self.hooks:
@@ -78,5 +80,5 @@ class ActivationRegularizer:
             "energy": self.energy_term,
             "flow": self.flow_term,
             "sparsity": self.sparsity_term,
-            # "quant": self.quant_term,
+            "quant": self.quant_term,
         }
