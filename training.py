@@ -25,8 +25,8 @@ class Training:
     optimizer: torch.optim.Optimizer
     epochs: int
     reg_factor: float
-    sparsity_period: int
     regularizer: callable = ActivationRegularizer
+    regularization_period: int = 4
     device: torch.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
@@ -144,18 +144,18 @@ class Trainer(TrainingOperation):
 
         if self._cosine is None:
             self._cosine = (
-                torch.tensor(2 * epoch / self._tr.sparsity_period * torch.pi)
+                torch.tensor(2 * epoch / self._tr.regularization_period * torch.pi)
                 .cos()
-                .add(1)
-                .div(2)
+                .add(2)
+                .div(4)
             )
 
         reg_term = (
-            torch.lerp(regs["sparsity"], regs["energy"], self._cosine)
-            .add(regs["flow"])
-            .add(epoch * regs["quant"])
+            torch.lerp(regs["flow"], regs["energy"], self._cosine)
+            .add(regs["sparsity"])
             .mul(factor)
             .mean()
+            .add(regs["quant"])
         )
 
         flow_term = sum(

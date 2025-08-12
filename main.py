@@ -93,10 +93,10 @@ def main():
         help="Regularization factor.",
     )
     parser.add_argument(
-        "--sparsity_period",
+        "--regularization_period",
         type=int,
-        default=6,
-        help="Sparsity period for regularization.",
+        default=4,
+        help="The full cycle for regularization.",
     )
     parser.add_argument(
         "--batch_size",
@@ -176,7 +176,7 @@ def main():
         "epochs": args.epochs,
         "regularizer": partial(ActivationRegularizer, module_type=inner_module),
         "reg_factor": args.reg_factor,
-        "sparsity_period": args.sparsity_period,
+        "regularization_period": args.regularization_period,
     }
 
     # --- Model Training ---
