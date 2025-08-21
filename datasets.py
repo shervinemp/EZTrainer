@@ -424,6 +424,57 @@ def load_fairface_dataset(
     return train_dataset, val_dataset, test_dataset, config
 
 
+def load_custom_dataset(
+    file_path: str,
+) -> tuple[Dataset, Dataset, Dataset, TaskConfig]:
+    """
+    Loads a custom dataset from a CSV file.
+
+    Args:
+        file_path (str): The path to the CSV file.
+
+    Returns:
+        tuple: A tuple containing the train, test, and validation datasets, and the task configuration.
+    """
+    data = pd.read_csv(file_path)
+    data = data.dropna()
+
+    if "target" in data.columns:
+        target_col = "target"
+    elif "label" in data.columns:
+        target_col = "label"
+    else:
+        target_col = data.columns[-1]
+
+    X = data.drop(target_col, axis=1).values
+    y = data[target_col].values
+
+    # Infer task type
+    if pd.api.types.is_numeric_dtype(y) and len(np.unique(y)) > 30:
+        classify = False
+        n_targets = 1 if len(y.shape) == 1 else y.shape[1]
+    else:
+        classify = True
+        le = LabelEncoder()
+        y = le.fit_transform(y)
+        n_targets = len(le.classes_)
+
+    (train_dataset, test_dataset), val_dataset = dataset_from_numpy(
+        X, y, classify=classify
+    )
+
+    config = TaskConfig(
+        name=f"Custom Dataset: {os.path.basename(file_path)}",
+        input_dim=X.shape[1],
+        n_targets=n_targets,
+        classify=classify,
+        cnn=False,  # Assuming no CNN for custom tabular data
+        timeseries=False,  # Assuming no time series for custom tabular data
+    )
+
+    return train_dataset, val_dataset, test_dataset, config
+
+
 def load_credit_risk_dataset() -> tuple[Dataset, Dataset, Dataset, TaskConfig]:
     """
     Loads the Credit Risk dataset for classification.

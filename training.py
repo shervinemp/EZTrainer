@@ -14,7 +14,7 @@ from copy import deepcopy
 from tqdm import tqdm
 from data_utils import TaskConfig, Task
 from regularization import ActivationRegularizer
-from typing import Any, List, Optional, Dict, Tuple
+from typing import Any, List, Optional, Dict, Tuple, Generator
 
 
 @dataclass
@@ -173,21 +173,19 @@ class Trainer(TrainingOperation):
 
         return loss_sq, (main_loss, reg_term, factor)
 
-    def run(self) -> Optional[nn.Module]:
+    def run(self) -> Generator[Tuple[int, float, nn.Module], None, None]:
         """
-        Runs the training loop.
+        Runs the training loop as a generator, yielding results after each epoch.
 
-        Returns:
-            Optional[nn.Module]: The best model based on validation score, or None if no validation is performed.
+        Yields:
+            Tuple[int, float, nn.Module]: A tuple containing the epoch number,
+            validation score, and the current model state.
         """
         task = self._tr.task
         config = task.config
 
         self.reg_handler = self._tr.regularizer(self._tr.model)
         self.evaluator = Evaluator(self._tr, logger=self.logger)
-
-        self.running_score = None
-        self.best_model = None
 
         model = self._tr.model.to(self._tr.device)
         _ = self._tr.criterion.to(self._tr.device)
@@ -224,7 +222,10 @@ class Trainer(TrainingOperation):
                         )
 
                     pbar.set_description(
-                        f"Epoch {epoch+1}/{self._tr.epochs} - @ {metrics['factor'] / (d:=i+1):.4f} - Loss: {metrics['loss'] / d:.4f} - Reg: {metrics['reg'] / d:.4f}"
+                        f"Epoch {epoch+1}/{self._tr.epochs} - "
+                        f"@ {metrics['factor'] / (d:=i+1):.4f} - "
+                        f"Loss: {metrics['loss'] / d:.4f} - "
+                        f"Reg: {metrics['reg'] / d:.4f}"
                     )
 
             if self.logger:
@@ -233,6 +234,7 @@ class Trainer(TrainingOperation):
                 )
 
             self._tr.model.eval()
+            val_score = -float("inf")
             if task.val_loader:
                 val_metrics = RunningMetrics()
                 with torch.no_grad():
@@ -250,11 +252,11 @@ class Trainer(TrainingOperation):
 
                 evaluation = self.evaluator()
                 if config.classify:
-                    acc, auc = evaluation.metrics
-                    val_score = acc + auc**0.5
+                    acc, auc, f1 = evaluation.metrics
+                    val_score = acc + auc**0.5 + f1
 
                     print(
-                        f"* Val Loss: {val_metrics['loss']:.4f} - Acc: {acc:.4f} - AUC: {auc:.4f}"
+                        f"* Val Loss: {val_metrics['loss']:.4f} - Acc: {acc:.4f} - AUC: {auc:.4f} - F1: {f1:.4f}"
                     )
                     if self.logger:
                         self.logger.log_metrics(
@@ -266,6 +268,7 @@ class Trainer(TrainingOperation):
                                 },
                                 accuracy=acc,
                                 auc=auc,
+                                f1=f1,
                                 val_loss=val_metrics["loss"],
                             ),
                             epoch,
@@ -282,21 +285,7 @@ class Trainer(TrainingOperation):
                             {"val_loss": val_metrics["loss"], "mae": mae, "mse": mse},
                             epoch,
                         )
-
-                if self.best_model is None:
-                    self.running_score = val_score
-
-                ratio = (0.99, 0.01)
-                if val_score >= self.running_score:
-                    self.best_model = deepcopy(self._tr.model)
-                    print("-- New best model --")
-                    ratio = (0.8, 0.2)
-
-                self.running_score = (
-                    self.running_score * ratio[0] + val_score * ratio[1]
-                )
-
-        return self.best_model
+            yield epoch, val_score, deepcopy(self._tr.model)
 
 
 class Evaluator(TrainingOperation):
@@ -360,13 +349,13 @@ class Evaluator(TrainingOperation):
 
             prec = precision_score(y_true_np, y_pred_np, **kwargs)
             rec = recall_score(y_true_np, y_pred_np, **kwargs)
-            f1 = f1_score(y_true_np, y_pred_np, **kwargs)
+            f1 = f1_score(y_true_np, y_pred_np, average="macro", zero_division=0)
 
-            metrics = (acc, auc)
+            metrics = (acc, auc, f1)
             report = {
                 "precision": prec,
                 "recall": rec,
-                "f1": f1,
+                "f1": f1_score(y_true_np, y_pred_np, **kwargs),
             }
         else:
             mae = np.abs(np.array(y_true_np) - np.array(y_pred_np)).mean()

@@ -452,3 +452,18 @@ class Visualizer:
             print(f"MAE: {metrics[0]:.4f}")
             print(f"MSE: {metrics[1]:.4f}")
         print("--------------------------\n")
+
+    def plot_learning_curve(self, history: List[float]):
+        """
+        Plots the learning curve.
+
+        Args:
+            history (List[float]): A list of validation scores.
+        """
+        plt.figure(figsize=(8, 6))
+        plt.plot(history)
+        plt.title("Learning Curve")
+        plt.xlabel("Epoch")
+        plt.ylabel("Validation Score")
+        plt.grid(True)
+        plt.show()

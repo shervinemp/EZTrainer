@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+from torch.nn.quantized import FloatFunctional
 
 from abc import ABC, abstractmethod
 from functools import partial
@@ -44,6 +45,7 @@ class Affine(nn.Module):
         )
         self.bias: nn.Parameter = nn.Parameter(torch.zeros((1, input_dim), dtype=dtype))
         self.jitter: torch.Tensor = torch.tensor(jitter, dtype=dtype)
+        self.quantized_functional = FloatFunctional()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -61,7 +63,11 @@ class Affine(nn.Module):
         if self.training and self.jitter:
             w = w * torch.exp2(torch.randn_like(x) * self.jitter)
             b = b + torch.randn_like(w) * self.jitter
-        return (x + b) * w
+
+        if x.is_quantized:
+            return self.quantized_functional.mul(self.quantized_functional.add(x, b), w)
+        else:
+            return (x + b) * w
 
 
 class QuickSkip(nn.Module):
@@ -85,6 +91,7 @@ class QuickSkip(nn.Module):
         self._coeff: nn.Parameter = nn.Parameter(
             torch.normal(mean=2 / 3, std=0.1, size=(1,))
         )
+        self.quantized_functional = FloatFunctional()
 
     def forward(self, z: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
         """
@@ -99,8 +106,11 @@ class QuickSkip(nn.Module):
         """
         transform_gate = torch.abs(self._coeff)
         carry_gate = torch.abs(1 - self._coeff**2) * 2
-        output = transform_gate * z + carry_gate * x
-        return output
+
+        if z.is_quantized:
+            return self.quantized_functional.add(self.quantized_functional.mul_scalar(z, transform_gate.item()), self.quantized_functional.mul_scalar(x, carry_gate.item()))
+        else:
+            return transform_gate * z + carry_gate * x
 
 
 class BaseBlock(nn.Module, ABC):
@@ -394,7 +404,8 @@ class RecurrentBlock(BaseBlock):
         self.prev_state_ = None
 
     def _detach_prev_hook(self, module, grad_input, grad_output):
-        self.prev_state_ = self.prev_state_.detach()
+        if self.prev_state_ is not None:
+            self.prev_state_ = self.prev_state_.detach()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -423,6 +434,76 @@ class RecurrentBlock(BaseBlock):
             x = layer(x)
             self.prev_state_[:, i * o_dim : (i + 1) * o_dim] = x
 
+        return x
+
+
+class HRMBlock(BaseBlock):
+    """
+    A Hierarchical Recurrent Memory block.
+    """
+
+    def __init__(
+        self,
+        input_dim: int,
+        output_dim: int,
+        n_levels: int = 2,
+        n_steps: int = 4,
+        inner_module: nn.Module = nn.Linear,
+        bias: bool = True,
+        activation: nn.Module = torch.tanh,
+        *,
+        activation_params: dict = None,
+        jitter: float = 0.005,
+        dtype: torch.dtype = torch.float32,
+    ):
+        super().__init__()
+        self.input_dim = input_dim
+        self.output_dim = output_dim
+        self.n_levels = n_levels
+        self.n_steps = n_steps
+        self.inner_module = inner_module
+        self.bias = bias
+        self.activation = activation
+        self.activation_params = activation_params or {}
+        self.jitter = jitter
+        self.dtype = dtype
+
+        self.levels = nn.ModuleList()
+        current_dim = input_dim
+        for _ in range(n_levels):
+            self.levels.append(
+                RecurrentBlock(
+                    input_dim=current_dim,
+                    output_dim=output_dim,
+                    inner_module=inner_module,
+                    bias=bias,
+                    activation=activation,
+                    activation_params=activation_params,
+                    jitter=jitter,
+                    dtype=dtype,
+                )
+            )
+            current_dim = output_dim
+
+        self.step = 0
+
+    def reset_state(self):
+        """Resets the state of the recurrent blocks and the step counter."""
+        for level in self.levels:
+            level.reset_state()
+        self.step = 0
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Applies the hierarchical recurrent block transformations.
+        """
+        self.step += 1
+        for i, level in enumerate(self.levels):
+            if i == 0:
+                x = level(x)
+            else:
+                if self.step % (self.n_steps**i) == 0:
+                    x = level(x)
         return x
 
 
@@ -462,6 +543,7 @@ class Network(nn.Module):
         activation_params: dict = None,
         collapse_output: bool = True,
         dtype: torch.dtype = torch.float32,
+        quantize: bool = False,
     ):
         super(Network, self).__init__()
 
@@ -477,6 +559,11 @@ class Network(nn.Module):
         self.activation_params = activation_params or {}
         self.collapse_output = collapse_output
         self.dtype = dtype
+        self.quantize = quantize
+
+        if self.quantize:
+            self.quant = torch.quantization.QuantStub()
+            self.dequant = torch.quantization.DeQuantStub()
 
         inner_block = partial(inner_block, inner_module=inner_module, dtype=dtype)
         layers = {
@@ -502,6 +589,9 @@ class Network(nn.Module):
 
     def forward(self, x):
         x = x.to(self.dtype)
+        if self.quantize:
+            x = self.quant(x)
+
         x = self.layers["input"](x)
 
         for layer in self.layers["hidden"]:
@@ -514,6 +604,10 @@ class Network(nn.Module):
 
         o = torch.cat(outputs, dim=1)
         d = self.layers["distrib"](x)
+
+        if self.quantize:
+            o = self.dequant(o)
+            d = self.dequant(d)
 
         if torch.is_complex(o):
             o = o.real

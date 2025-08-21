@@ -6,6 +6,7 @@ from lightning.pytorch.loggers import TensorBoardLogger
 from functools import partial
 import argparse
 import sys
+import os
 
 from datasets import (
     load_time_series_dataset,
@@ -22,11 +23,14 @@ from datasets import (
     load_boston_house_price_dataset,
     load_concrete_compressive_strength_dataset,
     load_energy_efficiency_dataset,
+    load_custom_dataset,
 )
-from modules import Network, UnitBlock, RecurrentBlock, PaddedConv2d
+from modules import Network, UnitBlock, RecurrentBlock, PaddedConv2d, HRMBlock
 from regularization import ActivationRegularizer
 from training import Evaluator, Trainer, Training, Task
 from visualization import Visualizer
+from copy import deepcopy
+
 
 # Set device
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -50,6 +54,36 @@ DATASET_LOADERS = {
 }
 
 
+def select_best_model(trainer: Trainer) -> tuple[nn.Module, list[float]]:
+    """
+    Selects the best model from the training generator.
+
+    Args:
+        trainer (Trainer): The trainer object.
+
+    Returns:
+        tuple[nn.Module, list[float]]: The best model and the history of validation scores.
+    """
+    best_model = None
+    running_score = -float("inf")
+    history = []
+
+    for epoch, val_score, model in trainer():
+        history.append(val_score)
+        if best_model is None:
+            running_score = val_score
+
+        ratio = (0.99, 0.01)
+        if val_score >= running_score:
+            best_model = deepcopy(model)
+            print("-- New best model --")
+            ratio = (0.8, 0.2)
+
+        running_score = running_score * ratio[0] + val_score * ratio[1]
+
+    return best_model, history
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Train and evaluate EZTrainer models on various datasets.",
@@ -59,8 +93,7 @@ def main():
         "--dataset",
         type=str,
         required=True,
-        choices=DATASET_LOADERS.keys(),
-        help=f"Name of the dataset to use. Available datasets: {', '.join(DATASET_LOADERS.keys())}",
+        help=f"Name of the dataset to use or path to a custom dataset file. Available presets: {', '.join(DATASET_LOADERS.keys())}",
     )
     parser.add_argument(
         "--epochs",
@@ -104,21 +137,31 @@ def main():
         default=32,
         help="Batch size for DataLoaders. If not provided, determined by dataset config.",
     )
+    parser.add_argument(
+        "--quantize",
+        action="store_true",
+        help="Enable quantization.",
+    )
 
     args = parser.parse_args()
 
     # --- Configuration ---
     # Load the selected dataset
-    dataset_name = args.dataset
-    if dataset_name not in DATASET_LOADERS:
-        print(f"Error: Dataset '{dataset_name}' not found.")
-        print(f"Available datasets: {', '.join(DATASET_LOADERS.keys())}")
+    dataset_identifier = args.dataset
+    if os.path.exists(dataset_identifier):
+        print(f"Loading custom dataset from: {dataset_identifier}")
+        train_dataset, val_dataset, test_dataset, config = load_custom_dataset(
+            dataset_identifier
+        )
+    elif dataset_identifier in DATASET_LOADERS:
+        print(f"Loading preset dataset: {dataset_identifier}")
+        train_dataset, val_dataset, test_dataset, config = DATASET_LOADERS[
+            dataset_identifier
+        ]()
+    else:
+        print(f"Error: Dataset '{dataset_identifier}' not found.")
+        print(f"Available presets: {', '.join(DATASET_LOADERS.keys())}")
         sys.exit(1)
-
-    print(f"Loading dataset: {dataset_name}")
-    # Handle potential arguments for specific dataset loaders if necessary
-    # For now, assuming no extra args needed for the selected dataset loaders
-    train_dataset, val_dataset, test_dataset, config = DATASET_LOADERS[dataset_name]()
 
     batch_size = args.batch_size
 
@@ -159,11 +202,12 @@ def main():
         "n_hidden": args.n_hidden,
         "output_dim": config.n_targets,
         "inner_module": inner_module,
-        "inner_block": RecurrentBlock if config.timeseries else UnitBlock,
+        "inner_block": HRMBlock if config.timeseries else UnitBlock,
         "activation": torch.tanh if config.classify else torch.nn.SiLU(),
         "activation_params": {},
         "collapse_output": True,
         "dtype": torch.float32,
+        "quantize": args.quantize,
     }
 
     # Training parameters
@@ -181,6 +225,9 @@ def main():
 
     # --- Model Training ---
     model = Network(**model_args)
+    if args.quantize:
+        model.qconfig = torch.quantization.get_default_qconfig("fbgemm")
+        torch.quantization.prepare(model, inplace=True)
     optimizer = optim.Adam(model.parameters(), lr=lr)
 
     log_root = "logs"
@@ -200,19 +247,26 @@ def main():
     trainer = Trainer(training=training, logger=logger)
     evaluator = Evaluator(training=training, logger=logger)
 
-    best_model = trainer()
+    best_model, history = select_best_model(trainer)
+
+    if args.quantize:
+        best_model.to("cpu")
+        torch.quantization.convert(best_model, inplace=True)
 
     print("Finished training model.")
 
     # --- Model Evaluation ---
     if best_model:
         print("\nEvaluating the best model on the test set...")
+        evaluator.training.model = best_model
         evaluation = evaluator()
 
         if config.classify:
-            acc, auc = evaluation.metrics
+            acc, auc, f1 = evaluation.metrics
             class_report = evaluation.report
-            print(f"Test Metrics - Accuracy: {acc:.4f}, AUC: {auc:.4f}")
+            print(
+                f"Test Metrics - Accuracy: {acc:.4f}, AUC: {auc:.4f}, F1-score: {f1:.4f}"
+            )
             print("Classification Report:")
             for metric_name, scores in class_report.items():
                 print(f"  {metric_name}: {scores}")
@@ -226,6 +280,7 @@ def main():
         visualizer = Visualizer(evaluator=evaluator)
         visualizer.visualize()
         visualizer.plot_node_distribution()
+        visualizer.plot_learning_curve(history)
         if config.classify:
             visualizer.visualize_tsne()  # t-SNE can be computationally expensive and might not be suitable for all datasets/environments
             if config.cnn:
