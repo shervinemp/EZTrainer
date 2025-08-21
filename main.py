@@ -137,13 +137,6 @@ def main():
         default=32,
         help="Batch size for DataLoaders. If not provided, determined by dataset config.",
     )
-    parser.add_argument(
-        "--dataset-length",
-        type=int,
-        default=None,
-        help="Length of the generated time series dataset.",
-    )
-
     args = parser.parse_args()
 
     # --- Configuration ---
@@ -156,14 +149,9 @@ def main():
         )
     elif dataset_identifier in DATASET_LOADERS:
         print(f"Loading preset dataset: {dataset_identifier}")
-        if dataset_identifier == "time_series" and args.dataset_length:
-            train_dataset, val_dataset, test_dataset, config = DATASET_LOADERS[
-                dataset_identifier
-            ](length=args.dataset_length)
-        else:
-            train_dataset, val_dataset, test_dataset, config = DATASET_LOADERS[
-                dataset_identifier
-            ]()
+        train_dataset, val_dataset, test_dataset, config = DATASET_LOADERS[
+            dataset_identifier
+        ]()
     else:
         print(f"Error: Dataset '{dataset_identifier}' not found.")
         print(f"Available presets: {', '.join(DATASET_LOADERS.keys())}")
