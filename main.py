@@ -138,9 +138,10 @@ def main():
         help="Batch size for DataLoaders. If not provided, determined by dataset config.",
     )
     parser.add_argument(
-        "--quantize",
-        action="store_true",
-        help="Enable quantization.",
+        "--dataset-length",
+        type=int,
+        default=None,
+        help="Length of the generated time series dataset.",
     )
 
     args = parser.parse_args()
@@ -155,9 +156,14 @@ def main():
         )
     elif dataset_identifier in DATASET_LOADERS:
         print(f"Loading preset dataset: {dataset_identifier}")
-        train_dataset, val_dataset, test_dataset, config = DATASET_LOADERS[
-            dataset_identifier
-        ]()
+        if dataset_identifier == "time_series" and args.dataset_length:
+            train_dataset, val_dataset, test_dataset, config = DATASET_LOADERS[
+                dataset_identifier
+            ](length=args.dataset_length)
+        else:
+            train_dataset, val_dataset, test_dataset, config = DATASET_LOADERS[
+                dataset_identifier
+            ]()
     else:
         print(f"Error: Dataset '{dataset_identifier}' not found.")
         print(f"Available presets: {', '.join(DATASET_LOADERS.keys())}")
@@ -207,7 +213,6 @@ def main():
         "activation_params": {},
         "collapse_output": True,
         "dtype": torch.float32,
-        "quantize": args.quantize,
     }
 
     # Training parameters
@@ -225,9 +230,6 @@ def main():
 
     # --- Model Training ---
     model = Network(**model_args)
-    if args.quantize:
-        model.qconfig = torch.quantization.get_default_qconfig("fbgemm")
-        torch.quantization.prepare(model, inplace=True)
     optimizer = optim.Adam(model.parameters(), lr=lr)
 
     log_root = "logs"
@@ -248,10 +250,6 @@ def main():
     evaluator = Evaluator(training=training, logger=logger)
 
     best_model, history = select_best_model(trainer)
-
-    if args.quantize:
-        best_model.to("cpu")
-        torch.quantization.convert(best_model, inplace=True)
 
     print("Finished training model.")
 

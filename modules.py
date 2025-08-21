@@ -1,6 +1,5 @@
 import torch
 import torch.nn as nn
-from torch.nn.quantized import FloatFunctional
 
 from abc import ABC, abstractmethod
 from functools import partial
@@ -9,6 +8,22 @@ from functools import partial
 class PaddedConv2d(nn.Conv2d):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs, kernel_size=3, padding="same")
+
+
+class ScaleGrad(nn.Module):
+    """
+    An identity layer that scales the gradient during the backward pass.
+    """
+    def __init__(self, scale_factor: float = 2.0):
+        super().__init__()
+        self.scale_factor = scale_factor
+        self.register_full_backward_hook(self._backward_hook)
+
+    def _backward_hook(self, module, grad_input, grad_output):
+        return tuple(grad * self.scale_factor if grad is not None else None for grad in grad_input)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return x
 
 
 class Affine(nn.Module):
@@ -45,7 +60,6 @@ class Affine(nn.Module):
         )
         self.bias: nn.Parameter = nn.Parameter(torch.zeros((1, input_dim), dtype=dtype))
         self.jitter: torch.Tensor = torch.tensor(jitter, dtype=dtype)
-        self.quantized_functional = FloatFunctional()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -63,11 +77,7 @@ class Affine(nn.Module):
         if self.training and self.jitter:
             w = w * torch.exp2(torch.randn_like(x) * self.jitter)
             b = b + torch.randn_like(w) * self.jitter
-
-        if x.is_quantized:
-            return self.quantized_functional.mul(self.quantized_functional.add(x, b), w)
-        else:
-            return (x + b) * w
+        return (x + b) * w
 
 
 class QuickSkip(nn.Module):
@@ -91,7 +101,6 @@ class QuickSkip(nn.Module):
         self._coeff: nn.Parameter = nn.Parameter(
             torch.normal(mean=2 / 3, std=0.1, size=(1,))
         )
-        self.quantized_functional = FloatFunctional()
 
     def forward(self, z: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
         """
@@ -106,11 +115,8 @@ class QuickSkip(nn.Module):
         """
         transform_gate = torch.abs(self._coeff)
         carry_gate = torch.abs(1 - self._coeff**2) * 2
-
-        if z.is_quantized:
-            return self.quantized_functional.add(self.quantized_functional.mul_scalar(z, transform_gate.item()), self.quantized_functional.mul_scalar(x, carry_gate.item()))
-        else:
-            return transform_gate * z + carry_gate * x
+        output = transform_gate * z + carry_gate * x
+        return output
 
 
 class BaseBlock(nn.Module, ABC):
@@ -543,7 +549,6 @@ class Network(nn.Module):
         activation_params: dict = None,
         collapse_output: bool = True,
         dtype: torch.dtype = torch.float32,
-        quantize: bool = False,
     ):
         super(Network, self).__init__()
 
@@ -559,11 +564,6 @@ class Network(nn.Module):
         self.activation_params = activation_params or {}
         self.collapse_output = collapse_output
         self.dtype = dtype
-        self.quantize = quantize
-
-        if self.quantize:
-            self.quant = torch.quantization.QuantStub()
-            self.dequant = torch.quantization.DeQuantStub()
 
         inner_block = partial(inner_block, inner_module=inner_module, dtype=dtype)
         layers = {
@@ -589,9 +589,6 @@ class Network(nn.Module):
 
     def forward(self, x):
         x = x.to(self.dtype)
-        if self.quantize:
-            x = self.quant(x)
-
         x = self.layers["input"](x)
 
         for layer in self.layers["hidden"]:
@@ -604,10 +601,6 @@ class Network(nn.Module):
 
         o = torch.cat(outputs, dim=1)
         d = self.layers["distrib"](x)
-
-        if self.quantize:
-            o = self.dequant(o)
-            d = self.dequant(d)
 
         if torch.is_complex(o):
             o = o.real

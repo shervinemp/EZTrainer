@@ -158,7 +158,7 @@ class FairFaceDataset(Dataset):
 
 # Dataset loading functions (adapted from the notebook)
 def load_time_series_dataset(
-    length: int = 1000000, n_features: int = 2, time_only: bool = False
+    length: int = 10000, n_features: int = 2, time_only: bool = False
 ) -> tuple[Dataset, Dataset, Dataset, TaskConfig]:
     """
     Generates a time series dataset for regression.
