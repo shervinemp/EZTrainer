@@ -16,7 +16,7 @@ from data_utils import (
     dataset_from_numpy,
     download_file_from_drive,
     _download_and_extract_kaggle_dataset,
-    TaskConfig,
+    DatasetInfo,
 )
 
 
@@ -156,64 +156,58 @@ class FairFaceDataset(Dataset):
         return None
 
 
-# Dataset loading functions (adapted from the notebook)
 def load_time_series_dataset(
-    length: int = 1000000, n_features: int = 2, time_only: bool = False
-) -> tuple[Dataset, Dataset, Dataset, TaskConfig]:
+    n_samples: int = 1000000, n_features: int = 3, noise_level: float = 0.5
+) -> DatasetInfo:
     """
     Generates a time series dataset for regression.
-    If time_only is True, generates a dataset with only temporal dependency.
 
     Args:
-        length (int): The total length of the time series.
-        n_features (int): The number of features in the time series (if time_only is False).
-        time_only (bool): If True, generates a dataset with only temporal dependency.
+        n_samples (int): The total length of the time series.
+        n_features (int): The number of features in the time series.
+        noise_level (float): The level of noise in the time series.
 
     Returns:
         tuple: A tuple containing the train, test, and validation datasets, and the task configuration.
     """
-    if time_only:
-        y = np.zeros(length)
-        y[0] = np.random.rand()
-        for t in range(1, length):
-            y[t] = np.sin(2 * np.pi * y[t - 1] / 10 + t / 50) + np.cos(
-                2 * np.pi * t / 500
+    X = np.zeros((n_samples, n_features))
+    X[0] = np.random.rand(n_features) * 5
+    for t in range(1, n_samples):
+        for f in range(n_features):
+            X[t, f] = (
+                0.8 * X[t - 1, f]
+                + np.sin(2 * np.pi * t / (50 + f * 10))
+                + np.random.normal(0, 0.2)
             )
-            y[t] += np.random.normal(0, 0.05)
-        X = np.zeros((length - 1, 1))
-        X[:, 0] = y[:-1]
-        y = y[1:]
-    else:
-        X = np.zeros((length, n_features))
-        y = np.zeros(length)
-        X[0] = np.random.rand(n_features)
-        for t in range(1, length):
 
-            def inner_function(x: float, t: int) -> float:
-                return np.sin(2 * np.pi * x / 10 + t / 50) + np.cos(2 * np.pi * t / 500)
+    y = np.zeros(n_samples)
+    y[0] = np.random.rand() * 5
+    for t in range(1, n_samples):
+        autoregressive_term = 0.4 * y[t - 1]
+        feature_term = 0.6 * X[t - 1, 0] + 0.2 * X[t - 1, 1]
+        trend_term = 0.05 * t
+        noise = np.random.normal(0, noise_level)
 
-            for feature_index in range(n_features):
-                X[t, feature_index] = inner_function(X[t - 1, feature_index], t)
-                X[t, feature_index] += np.random.normal(0, 0.05)
-            y[t] = inner_function(X[t, 0], t)
+        y[t] = autoregressive_term + feature_term + trend_term + noise
 
     (train_dataset, test_dataset), val_dataset = dataset_from_numpy(
-        X, y, classify=False, n_partitions=1000, partition_overlap=0.1
+        X, y, classify=False, n_partitions=100000, partition_overlap=0.8
     )
 
-    config = TaskConfig(
+    return DatasetInfo(
         name="Time Series",
         input_dim=X.shape[1],
         n_targets=1,
-        classify=False,
-        cnn=False,
-        timeseries=True,
+        is_classify=False,
+        is_image=False,
+        is_timeseries=True,
+        trainset=train_dataset,
+        testset=test_dataset,
+        valset=val_dataset,
     )
 
-    return train_dataset, test_dataset, val_dataset, config
 
-
-def load_air_quality_dataset() -> tuple[Dataset, Dataset, Dataset, TaskConfig]:
+def load_air_quality_dataset() -> tuple[Dataset, Dataset, Dataset, DatasetInfo]:
     """
     Loads the Air Quality dataset for regression.
 
@@ -249,19 +243,20 @@ def load_air_quality_dataset() -> tuple[Dataset, Dataset, Dataset, TaskConfig]:
         X, y, classify=False, imputation=True, n_partitions=1000, partition_overlap=0.5
     )
 
-    config = TaskConfig(
+    return DatasetInfo(
         name="Air Quality",
         input_dim=X.shape[1],
         n_targets=1,
-        classify=False,
-        cnn=False,
-        timeseries=True,
+        is_classify=False,
+        is_image=False,
+        is_timeseries=True,
+        trainset=train_dataset,
+        testset=test_dataset,
+        valset=val_dataset,
     )
 
-    return train_dataset, test_dataset, val_dataset, config
 
-
-def load_mnist_dataset() -> tuple[Dataset, Dataset, Dataset, TaskConfig]:
+def load_mnist_dataset() -> tuple[Dataset, Dataset, Dataset, DatasetInfo]:
     """
     Loads the MNIST dataset for classification.
 
@@ -284,19 +279,20 @@ def load_mnist_dataset() -> tuple[Dataset, Dataset, Dataset, TaskConfig]:
     val_dataset = val_split
     test_dataset = testset
 
-    config = TaskConfig(
+    return DatasetInfo(
         name="MNIST",
         input_dim=1,
         n_targets=10,
-        classify=True,
-        cnn=True,
-        timeseries=False,
+        is_classify=True,
+        is_image=True,
+        is_timeseries=False,
+        trainset=train_dataset,
+        testset=test_dataset,
+        valset=val_dataset,
     )
 
-    return train_dataset, test_dataset, val_dataset, config
 
-
-def load_fashion_mnist_dataset() -> tuple[Dataset, Dataset, Dataset, TaskConfig]:
+def load_fashion_mnist_dataset() -> tuple[Dataset, Dataset, Dataset, DatasetInfo]:
     """
     Loads the Fashion MNIST dataset for classification.
 
@@ -319,19 +315,20 @@ def load_fashion_mnist_dataset() -> tuple[Dataset, Dataset, Dataset, TaskConfig]
     val_dataset = val_split
     test_dataset = testset
 
-    config = TaskConfig(
+    return DatasetInfo(
         name="Fashion MNIST",
         input_dim=1,
         n_targets=10,
-        classify=True,
-        cnn=True,
-        timeseries=False,
+        is_classify=True,
+        is_image=True,
+        is_timeseries=False,
+        trainset=train_dataset,
+        testset=test_dataset,
+        valset=val_dataset,
     )
 
-    return train_dataset, test_dataset, val_dataset, config
 
-
-def load_cifar10_dataset() -> tuple[Dataset, Dataset, Dataset, TaskConfig]:
+def load_cifar10_dataset() -> tuple[Dataset, Dataset, Dataset, DatasetInfo]:
     """
     Loads the CIFAR-10 dataset for classification.
 
@@ -354,21 +351,22 @@ def load_cifar10_dataset() -> tuple[Dataset, Dataset, Dataset, TaskConfig]:
     val_dataset = val_split
     test_dataset = testset
 
-    config = TaskConfig(
+    return DatasetInfo(
         name="CIFAR-10",
         input_dim=3,
         n_targets=10,
-        classify=True,
-        cnn=True,
-        timeseries=False,
+        is_classify=True,
+        is_image=True,
+        is_timeseries=False,
+        trainset=train_dataset,
+        testset=test_dataset,
+        valset=val_dataset,
     )
-
-    return train_dataset, test_dataset, val_dataset, config
 
 
 def load_fairface_dataset(
     root_dir: str = ".",
-) -> tuple[Dataset, Dataset, Dataset, TaskConfig]:
+) -> tuple[Dataset, Dataset, Dataset, DatasetInfo]:
     """
     Loads the FairFace dataset for multi-label classification.
 
@@ -412,19 +410,20 @@ def load_fairface_dataset(
     # so we'll use the validation set as the test set for evaluation purposes in this example.
     test_dataset = val_dataset
 
-    config = TaskConfig(
+    return DatasetInfo(
         name="FairFace",
         input_dim=3,
         n_targets=tuple(len(encoder.classes_) for encoder in train_dataset.encoders),
-        classify=True,
-        cnn=True,
-        timeseries=False,
+        is_classify=True,
+        is_image=True,
+        is_timeseries=False,
+        trainset=train_dataset,
+        testset=test_dataset,
+        valset=val_dataset,
     )
 
-    return train_dataset, val_dataset, test_dataset, config
 
-
-def load_credit_risk_dataset() -> tuple[Dataset, Dataset, Dataset, TaskConfig]:
+def load_credit_risk_dataset() -> tuple[Dataset, Dataset, Dataset, DatasetInfo]:
     """
     Loads the Credit Risk dataset for classification.
 
@@ -465,19 +464,20 @@ def load_credit_risk_dataset() -> tuple[Dataset, Dataset, Dataset, TaskConfig]:
 
     (train_dataset, test_dataset), val_dataset = dataset_from_numpy(X, y)
 
-    config = TaskConfig(
+    return DatasetInfo(
         name="Credit Risk",
         input_dim=X.shape[1],
         n_targets=2,
-        classify=True,
-        cnn=False,
-        timeseries=False,
+        is_classify=True,
+        is_image=False,
+        is_timeseries=False,
+        trainset=train_dataset,
+        testset=test_dataset,
+        valset=val_dataset,
     )
 
-    return train_dataset, val_dataset, test_dataset, config
 
-
-def load_credit_card_fraud_dataset() -> tuple[Dataset, Dataset, Dataset, TaskConfig]:
+def load_credit_card_fraud_dataset() -> tuple[Dataset, Dataset, Dataset, DatasetInfo]:
     """
     Loads the Credit Card Fraud Detection dataset for classification.
 
@@ -498,19 +498,20 @@ def load_credit_card_fraud_dataset() -> tuple[Dataset, Dataset, Dataset, TaskCon
 
     (train_dataset, test_dataset), val_dataset = dataset_from_numpy(X, y)
 
-    config = TaskConfig(
+    return DatasetInfo(
         name="Credit Card Fraud",
         input_dim=X.shape[1],
         n_targets=2,
-        classify=True,
-        cnn=False,
-        timeseries=False,
+        is_classify=True,
+        is_image=False,
+        is_timeseries=False,
+        trainset=train_dataset,
+        testset=test_dataset,
+        valset=val_dataset,
     )
 
-    return train_dataset, val_dataset, test_dataset, config
 
-
-def load_uci_adult_dataset() -> tuple[Dataset, Dataset, Dataset, TaskConfig]:
+def load_uci_adult_dataset() -> tuple[Dataset, Dataset, Dataset, DatasetInfo]:
     """
     Loads the UCI Adult dataset for classification.
 
@@ -557,20 +558,21 @@ def load_uci_adult_dataset() -> tuple[Dataset, Dataset, Dataset, TaskConfig]:
 
     (train_dataset, test_dataset), val_dataset = dataset_from_numpy(X, y)
 
-    config = TaskConfig(
+    return DatasetInfo(
         name="UCI Adult",
         input_dim=X.shape[1],
         n_targets=2,
-        classify=True,
-        cnn=False,
-        timeseries=False,
+        is_classify=True,
+        is_image=False,
+        is_timeseries=False,
+        trainset=train_dataset,
+        testset=test_dataset,
+        valset=val_dataset,
     )
-
-    return train_dataset, val_dataset, test_dataset, config
 
 
 def load_playground_series_s5e3_dataset() -> (
-    tuple[Dataset, Dataset, Dataset, TaskConfig]
+    tuple[Dataset, Dataset, Dataset, DatasetInfo]
 ):
     """
     Loads the Playground Series S5E3 dataset for classification.
@@ -598,20 +600,21 @@ def load_playground_series_s5e3_dataset() -> (
 
     (train_dataset, test_dataset), val_dataset = dataset_from_numpy(X, y)
 
-    config = TaskConfig(
+    return DatasetInfo(
         name="Playground Series S5E3",
         input_dim=X.shape[1],
         n_targets=2,
-        classify=True,
-        cnn=False,
-        timeseries=False,
+        is_classify=True,
+        is_image=False,
+        is_timeseries=False,
+        trainset=train_dataset,
+        testset=test_dataset,
+        valset=val_dataset,
     )
-
-    return train_dataset, val_dataset, test_dataset, config
 
 
 def load_obesity_classification_dataset() -> (
-    tuple[Dataset, Dataset, Dataset, TaskConfig]
+    tuple[Dataset, Dataset, Dataset, DatasetInfo]
 ):
     """
     Loads the Obesity Classification dataset for classification.
@@ -635,20 +638,21 @@ def load_obesity_classification_dataset() -> (
 
     (train_dataset, test_dataset), val_dataset = dataset_from_numpy(X, y)
 
-    config = TaskConfig(
+    return DatasetInfo(
         name="Obesity Classification",
         input_dim=X.shape[1],
         n_targets=4,
-        classify=True,
-        cnn=False,
-        timeseries=False,
+        is_classify=True,
+        is_image=False,
+        is_timeseries=False,
+        trainset=train_dataset,
+        testset=test_dataset,
+        valset=val_dataset,
     )
-
-    return train_dataset, val_dataset, test_dataset, config
 
 
 def load_heart_failure_prediction_dataset() -> (
-    tuple[Dataset, Dataset, Dataset, TaskConfig]
+    tuple[Dataset, Dataset, Dataset, DatasetInfo]
 ):
     """
     Loads the Heart Failure Prediction dataset for classification.
@@ -676,19 +680,20 @@ def load_heart_failure_prediction_dataset() -> (
 
     (train_dataset, test_dataset), val_dataset = dataset_from_numpy(X, y)
 
-    config = TaskConfig(
+    return DatasetInfo(
         name="Heart Failure Prediction",
         input_dim=X.shape[1],
         n_targets=2,
-        classify=True,
-        cnn=False,
-        timeseries=False,
+        is_classify=True,
+        is_image=False,
+        is_timeseries=False,
+        trainset=train_dataset,
+        testset=test_dataset,
+        valset=val_dataset,
     )
 
-    return train_dataset, val_dataset, test_dataset, config
 
-
-def load_insurance_dataset() -> tuple[Dataset, Dataset, Dataset, TaskConfig]:
+def load_insurance_dataset() -> tuple[Dataset, Dataset, Dataset, DatasetInfo]:
     """
     Loads the Insurance dataset for regression.
 
@@ -717,19 +722,20 @@ def load_insurance_dataset() -> tuple[Dataset, Dataset, Dataset, TaskConfig]:
         X, y, classify=False
     )
 
-    config = TaskConfig(
+    return DatasetInfo(
         name="Insurance Dataset",
         input_dim=X.shape[1],
         n_targets=1,
-        classify=False,
-        cnn=False,
-        timeseries=False,
+        is_classify=False,
+        is_image=False,
+        is_timeseries=False,
+        trainset=train_dataset,
+        testset=test_dataset,
+        valset=val_dataset,
     )
 
-    return train_dataset, val_dataset, test_dataset, config
 
-
-def load_boston_house_price_dataset() -> tuple[Dataset, Dataset, Dataset, TaskConfig]:
+def load_boston_house_price_dataset() -> tuple[Dataset, Dataset, Dataset, DatasetInfo]:
     """
     Loads the Boston House Price dataset for regression.
 
@@ -752,20 +758,21 @@ def load_boston_house_price_dataset() -> tuple[Dataset, Dataset, Dataset, TaskCo
         X, y, classify=False
     )
 
-    config = TaskConfig(
+    return DatasetInfo(
         name="Boston House Price",
         input_dim=X.shape[1],
         n_targets=1,
-        classify=False,
-        cnn=False,
-        timeseries=False,
+        is_classify=False,
+        is_image=False,
+        is_timeseries=False,
+        trainset=train_dataset,
+        testset=test_dataset,
+        valset=val_dataset,
     )
-
-    return train_dataset, val_dataset, test_dataset, config
 
 
 def load_concrete_compressive_strength_dataset() -> (
-    tuple[Dataset, Dataset, Dataset, TaskConfig]
+    tuple[Dataset, Dataset, Dataset, DatasetInfo]
 ):
     """
     Loads the Concrete Compressive Strength dataset for regression.
@@ -785,19 +792,20 @@ def load_concrete_compressive_strength_dataset() -> (
         X, y, classify=False
     )
 
-    config = TaskConfig(
+    return DatasetInfo(
         name="Concrete Compressive Strength",
         input_dim=X.shape[1],
         n_targets=1,
-        classify=False,
-        cnn=False,
-        timeseries=False,
+        is_classify=False,
+        is_image=False,
+        is_timeseries=False,
+        trainset=train_dataset,
+        testset=test_dataset,
+        valset=val_dataset,
     )
 
-    return train_dataset, val_dataset, test_dataset, config
 
-
-def load_energy_efficiency_dataset() -> tuple[Dataset, Dataset, Dataset, TaskConfig]:
+def load_energy_efficiency_dataset() -> tuple[Dataset, Dataset, Dataset, DatasetInfo]:
     """
     Loads the Energy Efficiency dataset for multi-target regression.
 
@@ -815,13 +823,14 @@ def load_energy_efficiency_dataset() -> tuple[Dataset, Dataset, Dataset, TaskCon
         X, y, classify=False
     )
 
-    config = TaskConfig(
+    return DatasetInfo(
         name="Energy Efficiency",
         input_dim=X.shape[1],
         n_targets=y.shape[1],
-        classify=False,
-        cnn=False,
-        timeseries=False,
+        is_classify=False,
+        is_image=False,
+        is_timeseries=False,
+        trainset=train_dataset,
+        testset=test_dataset,
+        valset=val_dataset,
     )
-
-    return train_dataset, val_dataset, test_dataset, config

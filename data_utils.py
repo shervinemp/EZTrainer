@@ -1,33 +1,29 @@
 from dataclasses import dataclass
+import itertools
 import os
 import subprocess
 import zipfile
-from typing import List, Optional, Tuple, Union
+from typing import Iterable, List, Optional, Tuple, Union
 import numpy as np
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import MinMaxScaler, StandardScaler
 from torch.utils.data import TensorDataset
 from imblearn.over_sampling import RandomOverSampler
 import torch
-from torch.utils.data import DataLoader
+from torch.utils.data import Dataset
 
 
 @dataclass
-class TaskConfig:
+class DatasetInfo:
     name: str
     input_dim: int
     n_targets: Union[int, Tuple[int, ...]]
-    classify: bool
-    cnn: bool
-    timeseries: bool
-
-
-@dataclass
-class Task:
-    config: TaskConfig
-    train_loader: Optional[DataLoader] = None
-    val_loader: Optional[DataLoader] = None
-    test_loader: Optional[DataLoader] = None
+    is_classify: bool
+    is_image: bool
+    is_timeseries: bool
+    trainset: Dataset
+    testset: Dataset
+    valset: Dataset | None = None
 
 
 def download_file_from_drive(file_id, local_path, *args, **kwargs):
@@ -191,3 +187,7 @@ def dataset_from_numpy(
     val_dataset: TensorDataset = TensorDataset(X_val_tensor, y_val_tensor)
 
     return (train_dataset, test_dataset), val_dataset
+
+
+def repeat(iterable: Iterable, times: int):
+    return itertools.chain.from_iterable(itertools.repeat(iterable, times))

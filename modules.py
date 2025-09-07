@@ -377,11 +377,11 @@ class RecurrentBlock(BaseBlock):
             {
                 "forward_": nn.ModuleList(
                     [
-                        inner_(i_dim + o_dim, o_dim),
+                        inner_(i_dim * 2, o_dim),
                         *(inner_(o_dim, o_dim) for _ in range(r_dim - 1)),
                     ]
                 ),
-                "backward_": inner_(r_dim * o_dim, o_dim),
+                "backward_": inner_((o_dim + 1) // 2 * r_dim, i_dim),
             }
         )
 
@@ -408,10 +408,11 @@ class RecurrentBlock(BaseBlock):
         """
         o_dim = self.output_dim
         r_dim = self.recurrent_dim
+        r_band = (o_dim + 1) // 2
 
         if self.prev_state_ is None:
             self.prev_state_ = torch.zeros(
-                (x.shape[0], r_dim * o_dim, *x.shape[2:]),
+                (x.shape[0], r_band * r_dim, *x.shape[2:]),
                 dtype=x.dtype,
                 device=x.device,
             )
@@ -421,7 +422,7 @@ class RecurrentBlock(BaseBlock):
 
         for i, layer in enumerate(self.layers["forward_"]):
             x = layer(x)
-            self.prev_state_[:, i * o_dim : (i + 1) * o_dim] = x
+            self.prev_state_[:, i * r_band : (i + 1) * r_band] = x[:, :r_band]
 
         return x
 

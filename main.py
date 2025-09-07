@@ -25,10 +25,9 @@ from datasets import (
 )
 from modules import Network, UnitBlock, RecurrentBlock, PaddedConv2d
 from regularization import ActivationRegularizer
-from training import Evaluator, Trainer, Training, Task
+from training import DataParams, Evaluator, OptimParams, Trainer, TrainParams
 from visualization import Visualizer
 
-# Set device
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Mapping of dataset names to loading functions
@@ -104,11 +103,15 @@ def main():
         default=32,
         help="Batch size for DataLoaders. If not provided, determined by dataset config.",
     )
+    parser.add_argument(
+        "--min_batches",
+        type=int,
+        default=10,
+        help="Minimum number of batches per epoch, achieved by repeating the dataloader.",
+    )
 
     args = parser.parse_args()
 
-    # --- Configuration ---
-    # Load the selected dataset
     dataset_name = args.dataset
     if dataset_name not in DATASET_LOADERS:
         print(f"Error: Dataset '{dataset_name}' not found.")
@@ -116,89 +119,88 @@ def main():
         sys.exit(1)
 
     print(f"Loading dataset: {dataset_name}")
-    # Handle potential arguments for specific dataset loaders if necessary
-    # For now, assuming no extra args needed for the selected dataset loaders
-    train_dataset, val_dataset, test_dataset, config = DATASET_LOADERS[dataset_name]()
 
+    data_info = DATASET_LOADERS[dataset_name]()
     batch_size = args.batch_size
 
     train_loader = DataLoader(
-        train_dataset,
+        data_info.trainset,
         batch_size=batch_size,
         shuffle=True,
         num_workers=4,
     )
     val_loader = DataLoader(
-        val_dataset,
+        data_info.valset,
         batch_size=batch_size,
         shuffle=False,
         num_workers=4,
     )
     test_loader = DataLoader(
-        test_dataset,
+        data_info.testset,
         batch_size=batch_size,
         shuffle=False,
         num_workers=4,
     )
 
-    task = Task(
-        config=config,
+    data_params = DataParams(
+        info=data_info,
         train_loader=train_loader,
-        val_loader=val_loader,
         test_loader=test_loader,
+        val_loader=val_loader,
+        repeats=(args.min_batches - 1) // len(train_loader) + 1,
     )
     print("Dataset loaded successfully.")
+    print(
+        f"{len(data_info.trainset)=}, {len(data_info.testset)=}, {len(data_info.valset)=}"
+    )
 
-    # Model parameters
-    inner_module = PaddedConv2d if config.cnn else nn.Linear
+    inner_module = PaddedConv2d if data_info.is_image else nn.Linear
     model_args = {
-        "input_dim": config.input_dim,
+        "input_dim": data_info.input_dim,
         "hidden_dim": (
-            args.hidden_dim // (7 * config.cnn + 1) // (7 * config.timeseries + 1)
+            args.hidden_dim
+            // (7 * data_info.is_image + 1)
+            // (7 * data_info.is_timeseries + 1)
         ),
         "n_hidden": args.n_hidden,
-        "output_dim": config.n_targets,
+        "output_dim": data_info.n_targets,
         "inner_module": inner_module,
-        "inner_block": RecurrentBlock if config.timeseries else UnitBlock,
-        "activation": torch.tanh if config.classify else torch.nn.SiLU(),
+        "inner_block": RecurrentBlock if data_info.is_timeseries else UnitBlock,
+        "activation": torch.tanh if data_info.is_classify else torch.nn.SiLU(),
         "activation_params": {},
         "collapse_output": True,
         "dtype": torch.float32,
     }
-
-    # Training parameters
-    lr = args.lr / (9 * config.timeseries + 1)
-    train_args = {
-        "task": task,
-        "criterion": (
-            nn.CrossEntropyLoss(reduction="none") if config.classify else nn.MSELoss()
-        ),
-        "epochs": args.epochs,
-        "regularizer": partial(ActivationRegularizer, module_type=inner_module),
-        "reg_factor": args.reg_factor,
-        "regularization_period": args.regularization_period,
-    }
-
-    # --- Model Training ---
     model = Network(**model_args)
+
+    lr = args.lr / (9 * data_info.is_timeseries + 1)
     optimizer = optim.Adam(model.parameters(), lr=lr)
 
     log_root = "logs"
-    activation_name = "tanh" if config.classify else "silu"
+    activation_name = "tanh" if data_info.is_classify else "silu"
     log_name = f"main_model_{activation_name}_{lr}"
     logger = TensorBoardLogger(log_root, log_name)
 
-    print("Training model...")
-
-    training = Training(
+    optim_params = OptimParams(
         model=model,
+        criterion=(
+            nn.CrossEntropyLoss(reduction="none")
+            if data_info.is_classify
+            else nn.MSELoss()
+        ),
         optimizer=optimizer,
-        **train_args,
+        epochs=args.epochs,
+        regularizer=partial(ActivationRegularizer, module_type=inner_module),
+        reg_factor=args.reg_factor,
+        reg_period=args.regularization_period,
         device=device,
     )
 
-    trainer = Trainer(training=training, logger=logger)
-    evaluator = Evaluator(training=training, logger=logger)
+    print("Training model...")
+
+    params = TrainParams(optim=optim_params, data=data_params)
+    trainer = Trainer(params=params, logger=logger)
+    evaluator = Evaluator(params=params, logger=logger)
 
     best_model = trainer()
 
@@ -207,18 +209,10 @@ def main():
     # --- Model Evaluation ---
     if best_model:
         print("\nEvaluating the best model on the test set...")
-        evaluation = evaluator()
-
-        if config.classify:
-            acc, auc = evaluation.metrics
-            class_report = evaluation.report
-            print(f"Test Metrics - Accuracy: {acc:.4f}, AUC: {auc:.4f}")
-            print("Classification Report:")
-            for metric_name, scores in class_report.items():
-                print(f"  {metric_name}: {scores}")
-        else:
-            mae, mse = evaluation.metrics
-            print(f"Test Metrics - MAE: {mae:.4f}, MSE: {mse:.4f}")
+        evaluation = evaluator("test")
+        print("Report:")
+        for metric_name, scores in evaluation.report.items():
+            print(f"  {metric_name}: {scores}")
 
     # --- Visualization ---
     if best_model:
@@ -226,9 +220,9 @@ def main():
         visualizer = Visualizer(evaluator=evaluator)
         visualizer.visualize()
         visualizer.plot_node_distribution()
-        if config.classify:
+        if data_info.is_classify:
             visualizer.visualize_tsne()  # t-SNE can be computationally expensive and might not be suitable for all datasets/environments
-            if config.cnn:
+            if data_info.is_image:
                 visualizer.plot_misclassified_examples(
                     num_examples=72
                 )  # Example: plot 72 misclassified examples

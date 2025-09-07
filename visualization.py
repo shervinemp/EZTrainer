@@ -5,7 +5,6 @@ import torch.nn as nn
 from sklearn.metrics import auc, confusion_matrix, roc_curve
 from sklearn.manifold import TSNE
 from collections import defaultdict
-from data_utils import Task
 from modules import Affine
 from typing import List, Tuple, Dict
 
@@ -20,15 +19,13 @@ class Visualizer:
     def __init__(self, evaluator: Evaluator):
         self.evaluator = evaluator
 
-    def visualize(self):
+    def visualize(self, section: str = "test"):
         """
         Visualizes the model's performance and data characteristics.
         """
-        task = self.evaluator._tr.task
-        config = task.config
-        evaluation = self.evaluator()
-
-        if config.classify:
+        p = self.evaluator.params
+        evaluation = self.evaluator(section=section)
+        if p.data.info.is_classify:
             cm = confusion_matrix(
                 evaluation.y_true, evaluation.y_pred, normalize="true"
             )
@@ -37,9 +34,9 @@ class Visualizer:
             plt.title("Confusion Matrix")
             plt.colorbar()
             tick_marks = np.arange(
-                config.n_targets
-                if isinstance(config.n_targets, int)
-                else sum(config.n_targets)
+                p.data.info.n_targets
+                if isinstance(p.data.info.n_targets, int)
+                else sum(p.data.info.n_targets)
             )
             plt.xticks(tick_marks, tick_marks)
             plt.yticks(tick_marks, tick_marks)
@@ -47,7 +44,7 @@ class Visualizer:
             plt.ylabel("True Label")
             plt.show()
 
-            if isinstance(config.n_targets, int) and config.n_targets == 2:
+            if isinstance((n_ := p.data.info.n_targets), int) and n_ == 2:
                 if len(np.unique(evaluation.y_true)) > 1:
                     fpr, tpr, _ = roc_curve(
                         evaluation.y_true, [p[1] for p in evaluation.y_proba]
@@ -89,7 +86,7 @@ class Visualizer:
             plt.grid(True)
             plt.show()
 
-    def plot_node_distribution(self):
+    def plot_node_distribution(self, section: str = "test"):
         """
         Plots the distribution of the means of the absolute output of each node in the linear layers
         and the distribution of weights in affine layers.
@@ -104,9 +101,8 @@ class Visualizer:
 
             return hook
 
-        task = self.evaluator._tr.task
-        config = task.config
-        model = self.evaluator._tr.model
+        p = self.evaluator.params
+        model = p.optim.model
 
         hooks: List[torch.utils.hooks.RemovableHandle] = []
         for name, module in model.named_modules():
@@ -118,12 +114,12 @@ class Visualizer:
         model.eval()
         with torch.no_grad():
             try:
-                inputs, _ = next(iter(task.test_loader))
+                inputs, _ = next(iter(self.evaluator._get_loader(section)))
 
-                if not config.timeseries:
+                if not p.data.info.is_timeseries:
                     inputs = inputs.unsqueeze(1)
 
-                inputs = inputs.to(self.evaluator._tr.device)
+                inputs = inputs.to(p.optim.device)
                 _ = model(inputs[:, 0, ...])
             except StopIteration:
                 print(
@@ -162,7 +158,8 @@ class Visualizer:
 
     def _plot_weights_distribution(self):
         """Plots the distribution of weights in linear layers."""
-        model = self.evaluator._tr.model
+        p = self.evaluator.params
+        model = p.optim.model
         plt.figure(figsize=(10, 6))
         weights = np.concatenate(
             [
@@ -362,13 +359,11 @@ class Visualizer:
         plt.tight_layout()
         plt.show()
 
-    def visualize_tsne(self):
+    def visualize_tsne(self, section: str = "test"):
         """
         Visualizes the data using t-SNE with true and predicted labels.
         """
-        task = self.evaluator._tr.task
-        config = task.config
-        evaluation = self.evaluator()
+        evaluation = self.evaluator(section=section)
 
         y_true = evaluation.y_true
         y_pred = evaluation.y_pred
@@ -377,9 +372,9 @@ class Visualizer:
         # Get embeddings from the data loader
         all_embeddings: List[np.ndarray] = []
         with torch.no_grad():
-            for input, _ in task.test_loader:
-                input = input.cpu().numpy().reshape(len(input), -1)
-                all_embeddings.extend(input)
+            for inputs, _ in self.evaluator._get_loader(section):
+                inputs = inputs.cpu().numpy().reshape(len(inputs), -1)
+                all_embeddings.extend(inputs)
 
         all_embeddings = np.array(all_embeddings)
 
@@ -414,7 +409,7 @@ class Visualizer:
         plt.title("t-SNE Visualization of Test Data with Predicted Labels")
         plt.show()
 
-        if config.classify:
+        if self.evaluator.data.info.is_classify:
             plt.figure(figsize=(10, 8))
             for label in np.unique(y_true):
                 indices = np.where(y_true == label)[0]
