@@ -185,9 +185,10 @@ class Trainer(TrainingOperation):
             .add(regs["quant"])
         )
 
-        balance_term = sum(
-            [task_.weight.abs().mean() for task_ in self.optim.model.layers["output"]]
-        ) / len(self.optim.model.layers["output"])
+        output_layer = self.optim.model.layers["output"]
+        balance_term = sum([task.weight.abs().mean() for task in output_layer]) / len(
+            output_layer
+        )
 
         b_ = self.optim.model.layers["distrib"].bias
         factor_term = (out_of_dist - b_).neg().exp().mean()
