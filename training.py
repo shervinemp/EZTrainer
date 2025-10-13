@@ -40,6 +40,7 @@ class DataParams:
     test_loader: DataLoader
     val_loader: DataLoader | None = None
     repeats: int = 1
+    recursions: int = 1
 
 
 @dataclass
@@ -64,6 +65,9 @@ class RunningMetrics(defaultdict):
     def __init__(self):
         super().__init__(float)
         self.count: int = 0
+
+    def reset(self):
+        self.count = 0
 
     def update(self, metrics: Dict[str, float]):
         """
@@ -214,14 +218,17 @@ class Trainer(TrainingOperation):
         evaluator = Evaluator(self.params, logger=self.logger)
         self.reg_handler = self.optim.regularizer(model)
 
+        repeats = self.data.repeats
+        recursions = self.data.recursions
+
         self.running_score = None
         self.best_model = None
 
+        metrics = RunningMetrics()
         model.train()
-        repeats = self.data.repeats
         for epoch in range(self.optim.epochs):
+            metrics.reset()
             self._cosine = None
-            metrics = RunningMetrics()
             loader = self._get_loader("train")
             pbar = tqdm(
                 repeat(loader, repeats),
@@ -232,26 +239,29 @@ class Trainer(TrainingOperation):
                     inputs, labels = self._format_data(inputs, labels)
 
                     optimizer.zero_grad()
-                    model.reset_state()
 
                     t_total = inputs.shape[1]
                     for t_step in range(t_total):
                         inputs_step = inputs[:, t_step]
                         labels_step = labels[:, t_step]
 
-                        loss, (main_loss_step, reg_term_step, factor_step) = self._iter(
-                            inputs_step, labels_step, epoch
-                        )
-                        loss.backward(retain_graph=t_step < t_total - 1)
-                        optimizer.step()
+                        for r_step in range(recursions):
+                            loss, (main_loss_step, reg_term_step, factor_step) = (
+                                self._iter(inputs_step, labels_step, epoch)
+                            )
+                            loss.backward()
 
-                        metrics.update(
-                            {
-                                "loss": main_loss_step.item() / t_total,
-                                "reg": reg_term_step.item() / t_total,
-                                "factor": factor_step.mean().item() / t_total,
-                            }
-                        )
+                            denom = t_total * recursions
+                            metrics.update(
+                                {
+                                    "loss": main_loss_step.item() / denom,
+                                    "reg": reg_term_step.item() / denom,
+                                    "factor": factor_step.mean().item() / denom,
+                                }
+                            )
+
+                        optimizer.step()
+                        model.reset_state()
 
                     pbar.set_description(
                         f"Epoch {epoch+1}/{self.optim.epochs} - @ {metrics['factor'] / (d:=i+1):.4f} - Loss: {metrics['loss'] / d:.4f} - Reg: {metrics['reg'] / d:.4f}"
@@ -288,7 +298,7 @@ class Trainer(TrainingOperation):
                     )
                 else:
                     mae, mse = itemgetter("mae", "mse")(evaluation.report)
-                    val_score = -mae + mse**0.5
+                    val_score = -(mae + mse**0.5)
 
                     print(
                         f"* Val Loss: {val_metrics['loss']:.4f} - MAE: {mae:.4f} - MSE: {mse:.4f}"

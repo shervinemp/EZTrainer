@@ -1,3 +1,4 @@
+from dataclasses import replace
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -109,6 +110,12 @@ def main():
         default=10,
         help="Minimum number of batches per epoch, achieved by repeating the dataloader.",
     )
+    parser.add_argument(
+        "--n_recurse",
+        type=int,
+        default=1,
+        help="Number of recursions for each data point. Forces time-series behaviour.",
+    )
 
     args = parser.parse_args()
 
@@ -122,6 +129,7 @@ def main():
 
     data_info = DATASET_LOADERS[dataset_name]()
     batch_size = args.batch_size
+    n_recurse = args.n_recurse
 
     train_loader = DataLoader(
         data_info.trainset,
@@ -148,6 +156,7 @@ def main():
         test_loader=test_loader,
         val_loader=val_loader,
         repeats=(args.min_batches - 1) // len(train_loader) + 1,
+        recursions=n_recurse,
     )
     print("Dataset loaded successfully.")
     print(
@@ -165,7 +174,9 @@ def main():
         "n_hidden": args.n_hidden,
         "output_dim": data_info.n_targets,
         "inner_module": inner_module,
-        "inner_block": RecurrentBlock if data_info.is_timeseries else UnitBlock,
+        "inner_block": (
+            RecurrentBlock if (data_info.is_timeseries or n_recurse > 1) else UnitBlock
+        ),
         "activation": torch.tanh if data_info.is_classify else torch.nn.SiLU(),
         "activation_params": {},
         "collapse_output": True,
