@@ -524,7 +524,7 @@ class RecurrentBlock(BaseBlock):
         if self.prev_state_.shape != (
             new_shape := (x.shape[0], s_dim * r_dim, *x.shape[2:])
         ):
-            self.prev_state_ = torch.broadcast_to(self.prev_state_, new_shape).clone()
+            self.prev_state_ = torch.zeros(new_shape, dtype=torch.float32)
 
         h = self.layers["backward_"](self.prev_state_)
         x = torch.cat([x, h], dim=1)
