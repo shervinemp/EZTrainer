@@ -166,9 +166,6 @@ def load_time_series_dataset(
         n_samples (int): The total length of the time series.
         n_features (int): The number of features in the time series.
         noise_level (float): The level of noise in the time series.
-
-    Returns:
-        tuple: A tuple containing the train, test, and validation datasets, and the task configuration.
     """
     X = np.zeros((n_samples, n_features))
     X[0] = np.random.rand(n_features) * 5
@@ -196,7 +193,7 @@ def load_time_series_dataset(
 
     return DatasetInfo(
         name="Time Series",
-        input_dim=X.shape[1],
+        input_dim=n_features,
         n_targets=1,
         is_classify=False,
         is_image=False,
@@ -207,12 +204,9 @@ def load_time_series_dataset(
     )
 
 
-def load_air_quality_dataset() -> tuple[Dataset, Dataset, Dataset, DatasetInfo]:
+def load_air_quality_dataset() -> DatasetInfo:
     """
     Loads the Air Quality dataset for regression.
-
-    Returns:
-        tuple: A tuple containing the train, test, and validation datasets, and the task configuration.
     """
     url = "https://archive.ics.uci.edu/ml/machine-learning-databases/00360/AirQualityUCI.zip"
     response = requests.get(url)
@@ -256,7 +250,7 @@ def load_air_quality_dataset() -> tuple[Dataset, Dataset, Dataset, DatasetInfo]:
     )
 
 
-def load_mnist_dataset() -> tuple[Dataset, Dataset, Dataset, DatasetInfo]:
+def load_mnist_dataset() -> DatasetInfo:
     """
     Loads the MNIST dataset for classification.
 
@@ -292,7 +286,7 @@ def load_mnist_dataset() -> tuple[Dataset, Dataset, Dataset, DatasetInfo]:
     )
 
 
-def load_fashion_mnist_dataset() -> tuple[Dataset, Dataset, Dataset, DatasetInfo]:
+def load_fashion_mnist_dataset() -> DatasetInfo:
     """
     Loads the Fashion MNIST dataset for classification.
 
@@ -328,7 +322,7 @@ def load_fashion_mnist_dataset() -> tuple[Dataset, Dataset, Dataset, DatasetInfo
     )
 
 
-def load_cifar10_dataset() -> tuple[Dataset, Dataset, Dataset, DatasetInfo]:
+def load_cifar10_dataset() -> DatasetInfo:
     """
     Loads the CIFAR-10 dataset for classification.
 
@@ -364,9 +358,7 @@ def load_cifar10_dataset() -> tuple[Dataset, Dataset, Dataset, DatasetInfo]:
     )
 
 
-def load_fairface_dataset(
-    root_dir: str = ".",
-) -> tuple[Dataset, Dataset, Dataset, DatasetInfo]:
+def load_fairface_dataset(root_dir: str = ".") -> DatasetInfo:
     """
     Loads the FairFace dataset for multi-label classification.
 
@@ -423,7 +415,7 @@ def load_fairface_dataset(
     )
 
 
-def load_credit_risk_dataset() -> tuple[Dataset, Dataset, Dataset, DatasetInfo]:
+def load_credit_risk_dataset() -> DatasetInfo:
     """
     Loads the Credit Risk dataset for classification.
 
@@ -477,7 +469,7 @@ def load_credit_risk_dataset() -> tuple[Dataset, Dataset, Dataset, DatasetInfo]:
     )
 
 
-def load_credit_card_fraud_dataset() -> tuple[Dataset, Dataset, Dataset, DatasetInfo]:
+def load_credit_card_fraud_dataset() -> DatasetInfo:
     """
     Loads the Credit Card Fraud Detection dataset for classification.
 
@@ -511,7 +503,7 @@ def load_credit_card_fraud_dataset() -> tuple[Dataset, Dataset, Dataset, Dataset
     )
 
 
-def load_uci_adult_dataset() -> tuple[Dataset, Dataset, Dataset, DatasetInfo]:
+def load_uci_adult_dataset() -> DatasetInfo:
     """
     Loads the UCI Adult dataset for classification.
 
@@ -571,9 +563,7 @@ def load_uci_adult_dataset() -> tuple[Dataset, Dataset, Dataset, DatasetInfo]:
     )
 
 
-def load_playground_series_s5e3_dataset() -> (
-    tuple[Dataset, Dataset, Dataset, DatasetInfo]
-):
+def load_playground_series_s5e3_dataset() -> DatasetInfo:
     """
     Loads the Playground Series S5E3 dataset for classification.
 
@@ -613,9 +603,7 @@ def load_playground_series_s5e3_dataset() -> (
     )
 
 
-def load_obesity_classification_dataset() -> (
-    tuple[Dataset, Dataset, Dataset, DatasetInfo]
-):
+def load_obesity_classification_dataset() -> DatasetInfo:
     """
     Loads the Obesity Classification dataset for classification.
 
@@ -651,9 +639,7 @@ def load_obesity_classification_dataset() -> (
     )
 
 
-def load_heart_failure_prediction_dataset() -> (
-    tuple[Dataset, Dataset, Dataset, DatasetInfo]
-):
+def load_heart_failure_prediction_dataset() -> DatasetInfo:
     """
     Loads the Heart Failure Prediction dataset for classification.
 
@@ -693,7 +679,7 @@ def load_heart_failure_prediction_dataset() -> (
     )
 
 
-def load_insurance_dataset() -> tuple[Dataset, Dataset, Dataset, DatasetInfo]:
+def load_insurance_dataset() -> DatasetInfo:
     """
     Loads the Insurance dataset for regression.
 
@@ -735,7 +721,7 @@ def load_insurance_dataset() -> tuple[Dataset, Dataset, Dataset, DatasetInfo]:
     )
 
 
-def load_boston_house_price_dataset() -> tuple[Dataset, Dataset, Dataset, DatasetInfo]:
+def load_boston_house_price_dataset() -> DatasetInfo:
     """
     Loads the Boston House Price dataset for regression.
 
@@ -771,9 +757,7 @@ def load_boston_house_price_dataset() -> tuple[Dataset, Dataset, Dataset, Datase
     )
 
 
-def load_concrete_compressive_strength_dataset() -> (
-    tuple[Dataset, Dataset, Dataset, DatasetInfo]
-):
+def load_concrete_compressive_strength_dataset() -> DatasetInfo:
     """
     Loads the Concrete Compressive Strength dataset for regression.
 
@@ -805,7 +789,7 @@ def load_concrete_compressive_strength_dataset() -> (
     )
 
 
-def load_energy_efficiency_dataset() -> tuple[Dataset, Dataset, Dataset, DatasetInfo]:
+def load_energy_efficiency_dataset() -> DatasetInfo:
     """
     Loads the Energy Efficiency dataset for multi-target regression.
 
