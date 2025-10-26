@@ -83,13 +83,13 @@ def main():
     parser.add_argument(
         "--lr",
         type=float,
-        default=1e-4,  # Will be adjusted based on time_series
+        default=1e-4,  # Will be adjusted if time_series
         help="Learning rate for the optimizer.",
     )
     parser.add_argument(
         "--reg_factor",
         type=float,
-        default=1732e-6,  # No particular reason but works well
+        default=1e-2,
         help="Regularization factor.",
     )
     parser.add_argument(
@@ -192,13 +192,13 @@ def main():
     log_name = f"main_model_{activation_name}_{lr}"
     logger = TensorBoardLogger(log_root, log_name)
 
+    criterion = (
+        nn.CrossEntropyLoss(reduction="none") if data_info.is_classify else nn.MSELoss()
+    )
+
     optim_params = OptimParams(
         model=model,
-        criterion=(
-            nn.CrossEntropyLoss(reduction="none")
-            if data_info.is_classify
-            else nn.MSELoss()
-        ),
+        criterion=criterion,
         optimizer=optimizer,
         epochs=args.epochs,
         regularizer=partial(ActivationRegularizer, module_type=inner_module),

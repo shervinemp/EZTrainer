@@ -167,7 +167,7 @@ class Trainer(TrainingOperation):
         """
         output, out_of_dist = self.optim.model(inputs)
 
-        factor = out_of_dist.detach().abs().square().add(1).log2()
+        factor = out_of_dist.abs().detach()
         main_loss = (factor * self.optim.criterion(output, labels)).mean()
 
         regs = self.reg_handler.get()
@@ -188,21 +188,11 @@ class Trainer(TrainingOperation):
             .mean()
             .add(regs["quant"])
         )
+        factor_term = out_of_dist.mean() ** 2
 
-        output_layer = self.optim.model.layers["output"]
-        balance_term = sum([task.weight.abs().mean() for task in output_layer]) / len(
-            output_layer
-        )
+        loss = main_loss + self.optim.reg_factor * (reg_term + factor_term)
 
-        b_ = self.optim.model.layers["distrib"].bias
-        factor_term = (out_of_dist - b_).neg().exp().mean()
-
-        loss = main_loss + self.optim.reg_factor * (
-            reg_term + factor_term + balance_term
-        )
-        loss_sq = loss**2 / 2 + loss
-
-        return loss_sq, (main_loss, reg_term, factor)
+        return loss, (main_loss, reg_term, factor)
 
     def run(self) -> nn.Module | None:
         """

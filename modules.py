@@ -1,4 +1,4 @@
-from typing import Callable
+from typing import Any, Callable
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -12,60 +12,106 @@ class PaddedConv2d(nn.Conv2d):
         super().__init__(*args, **kwargs, kernel_size=3, padding="same")
 
 
-class Affine(nn.Module):
-    """
-    Applies a learnable affine transformation (scaling and shift) to the input tensor.
-
-    This module performs an element-wise scaling and shifting of the input,
-    controlled by learnable parameters `weight` and `bias`. It can optionally
-    apply jitter during training.
-
-    Args:
-        input_dim (int): The dimension of the input feature space.
-        jitter (float, optional): The standard deviation of the random noise
-            applied to weight and bias during training. Defaults to 0.005.
-        dtype (torch.dtype, optional): The data type of the module parameters.
-            Defaults to torch.float32.
-
-    Attributes:
-        weight (nn.Parameter): Learnable scaling parameter.
-        bias (nn.Parameter): Learnable shifting parameter.
-        jitter (torch.Tensor): Jitter value as a tensor.
-    """
+class AdaptiveBatchNorm(nn.Module):
 
     def __init__(
         self,
         input_dim: int,
         *,
-        jitter: float = 0.005,
+        alpha: float = 0.95,
+        eps: float = 0.01,
         dtype: torch.dtype = torch.float32,
     ):
         super().__init__()
 
         self.input_dim = input_dim
+        self.alpha = alpha
+        self.eps = eps
+
         self.weight: nn.Parameter = nn.Parameter(
             torch.ones((1, input_dim), dtype=dtype)
         )
         self.bias: nn.Parameter = nn.Parameter(torch.zeros((1, input_dim), dtype=dtype))
-        self.jitter: torch.Tensor = torch.tensor(jitter, dtype=dtype)
+
+        self.register_buffer("mean_ema", None)
+        self.register_buffer("std_ema", None)
+
+        self.register_buffer(
+            "_count", torch.zeros(1, dtype=torch.long), persistent=False
+        )
+        self.register_buffer(
+            "_cum_mean", torch.zeros((1, input_dim), dtype=dtype), persistent=False
+        )
+        self.register_buffer(
+            "_cum_mean_sq", torch.zeros((1, input_dim), dtype=dtype), persistent=False
+        )
+
+        self.register_forward_pre_hook(self._forward_pre_hook)
+        self.register_full_backward_hook(self._backward_hook)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Applies the affine transformation to the input tensor.
+        x_norm = (x - self.mean_ema) / (self.std_ema + self.eps)
 
-        Args:
-            x (torch.Tensor): The input tensor.
-
-        Returns:
-            torch.Tensor: The output tensor after applying the affine transformation.
-        """
         view_shape = self.weight.shape + (1,) * (len(x.shape) - 2)
         w = self.weight.view(view_shape)
         b = self.bias.view(view_shape)
-        if self.training and self.jitter:
-            w = w * torch.exp2(torch.randn_like(x) * self.jitter)
-            b = b + torch.randn_like(w) * self.jitter
-        return (x + b) * w
+        o = (x_norm + b) * w
+
+        return o
+
+    def _backward_hook(self, module: nn.Module, grad_input: Any, grad_output: Any):
+        self._count.zero_()
+
+    @torch.no_grad()
+    def _forward_pre_hook(self, module: nn.Module, args: tuple):
+        """
+        This hook performs the adaptive update, using stats accumulated across all previous forward calls.
+        """
+
+        if not self.training:
+            return
+
+        x = args[0]
+
+        old_count = self._count.clone()
+        old_mean = self.mean_ema
+        old_std = self.std_ema
+
+        self._count += x.shape[0]
+
+        if old_count == 0:
+            if old_mean is None:
+                self.mean_ema = torch.mean(x, dim=0, keepdim=True).detach()
+                self.std_ema = torch.std(x, dim=0, keepdim=True).detach()
+            else:
+                c_std = torch.clamp(self._cum_mean_sq - self._cum_mean**2, 0.0) ** 0.5
+                factor = 1 - self.alpha
+                self.mean_ema.data.add_((self._cum_mean - old_mean) * factor)
+                self.std_ema.data.add_((c_std - old_std) * factor)
+                self._adjust_weight(old_mean, old_std, self.mean_ema, self.std_ema)
+
+            self._cum_mean.zero_()
+            self._cum_mean_sq.zero_()
+
+        self._cum_mean += (x - self._cum_mean).sum(dim=0, keepdim=True) / self._count
+        self._cum_mean_sq += (x**2 - self._cum_mean_sq).sum(
+            dim=0, keepdim=True
+        ) / self._count
+
+    @torch.no_grad()
+    def _adjust_weight(self, old_mean, old_std, new_mean, new_std):
+        """
+        Adjusts the weight and bias based on the new mean and std.
+        """
+        new_std = new_std + self.eps
+        old_std = old_std + self.eps
+
+        scale = new_std / old_std
+        shift = new_mean - old_mean
+
+        self.weight.data.mul_(scale)
+        self.bias.data.div_(scale)
+        self.bias.data.add_(shift / new_std)
 
 
 class QuickSkip(nn.Module):
@@ -118,21 +164,6 @@ class BaseBlock(nn.Module, ABC):
 
 
 class AffineBlock(BaseBlock):
-    """
-    A block combining an Affine transformation and an inner module (e.g., Linear).
-
-    Args:
-        input_dim (int): The dimension of the input feature space.
-        output_dim (int): The dimension of the output feature space.
-        inner_module (nn.Module, optional): The inner module to apply after the
-            Affine transformation. Defaults to nn.Linear.
-        bias (bool, optional): Whether the inner module should include a bias term.
-            Defaults to True.
-        jitter (float, optional): Jitter parameter for the Affine layer.
-            Defaults to 0.005.
-        dtype (torch.dtype, optional): Data type for the layers.
-            Defaults to torch.float32.
-    """
 
     def __init__(
         self,
@@ -141,7 +172,6 @@ class AffineBlock(BaseBlock):
         inner_module: nn.Module = nn.Linear,
         bias: bool = True,
         *,
-        jitter: float = 0.005,
         dtype: torch.dtype = torch.float32,
     ):
         super().__init__()
@@ -152,7 +182,7 @@ class AffineBlock(BaseBlock):
 
         self.layers = nn.ModuleDict(
             {
-                "affine": Affine(input_dim, jitter=jitter, dtype=dtype),
+                "affine": AdaptiveBatchNorm(input_dim, dtype=dtype),
                 "inner": inner_module(input_dim, output_dim, bias=bias, dtype=dtype),
             }
         )
@@ -259,7 +289,6 @@ class UnitBlock(BaseBlock):
         activation: nn.Module | Callable = torch.tanh,
         *,
         activation_params: dict = None,
-        jitter: float = 0.005,
         dtype: torch.dtype = torch.float32,
     ):
         super().__init__()
@@ -275,7 +304,6 @@ class UnitBlock(BaseBlock):
                     output_dim=output_dim,
                     inner_module=inner_module,
                     bias=bias,
-                    jitter=jitter,
                     dtype=dtype,
                 ),
                 "skip": SkipBlock(
@@ -339,12 +367,7 @@ class AttentionBlock(BaseBlock):
         heads: int = 1,
         inner_module: nn.Module = nn.Linear,
         bias: bool = True,
-        activation: nn.Module | Callable = torch.tanh,
         *,
-        kernel_activation: nn.Module | Callable = lambda x: F.elu(x) + 1,
-        activation_params: dict = None,
-        jitter: float = 0.005,
-        dtype: torch.dtype = torch.float32,
         eps: float = 1e-6,
     ):
         super().__init__()
@@ -356,51 +379,37 @@ class AttentionBlock(BaseBlock):
 
         self.layers = nn.ModuleDict(
             {
-                "query": UnitBlock(
-                    input_dim=input_dim,
-                    output_dim=heads * output_dim,
-                    inner_module=inner_module,
+                "query_key": inner_module(
+                    input_dim,
+                    (heads + 1) * output_dim,
                     bias=bias,
-                    activation=kernel_activation,
-                    jitter=jitter,
-                    dtype=dtype,
                 ),
-                "key": UnitBlock(
-                    input_dim=input_dim,
-                    output_dim=output_dim,
-                    inner_module=inner_module,
+                "value": inner_module(
+                    input_dim,
+                    output_dim,
                     bias=bias,
-                    activation=kernel_activation,
-                    jitter=jitter,
-                    dtype=dtype,
-                ),
-                "value": UnitBlock(
-                    input_dim=input_dim,
-                    output_dim=output_dim,
-                    inner_module=inner_module,
-                    bias=bias,
-                    activation=activation,
-                    activation_params=activation_params or {},
-                    jitter=jitter,
-                    dtype=dtype,
                 ),
             }
         )
 
     def reset_state(self):
         """Resets the state of the inner blocks."""
-        self.layers["query"].reset_state()
-        self.layers["key"].reset_state()
-        self.layers["value"].reset_state()
+        if hasattr(self.layers["query_key"], "reset_state"):
+            self.layers["query_key"].reset_state()
+        if hasattr(self.layers["value"], "reset_state"):
+            self.layers["value"].reset_state()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         b, _, *spatial_dims = x.shape
 
         d, h = self.output_dim, self.heads
 
-        query = self.layers["query"](x).view(b, h, d, -1)
-        key = self.layers["key"](x).view(b, d, -1)
-        value = self.layers["value"](x).view(b, d, -1)
+        query, key = self.layers["query_key"](x).split([h * d, d], dim=1)
+        value = self.layers["value"](x)
+
+        query = query.view(b, h, d, -1)
+        key = key.view(b, d, -1)
+        value = value.view(b, d, -1)
 
         k_sum = key.sum(dim=2)
         context = torch.einsum("bdn,ben->bde", key, value)
@@ -446,7 +455,6 @@ class RecurrentBlock(BaseBlock):
         activation: nn.Module | Callable = torch.tanh,
         *,
         activation_params: dict = None,
-        jitter: float = 0.005,
         dtype: torch.dtype = torch.float32,
     ):
 
@@ -458,7 +466,6 @@ class RecurrentBlock(BaseBlock):
         self.bias: bool = bias
         self.activation: nn.Module | Callable = activation
         self.activation_params: dict[str, float] = activation_params or {}
-        self.jitter: float = jitter
         self.dtype: torch.dtype = dtype
         self.state_dim = (output_dim + 1) // 2
 
@@ -473,40 +480,56 @@ class RecurrentBlock(BaseBlock):
             bias=self.bias,
             activation=self.activation,
             activation_params=self.activation_params,
-            jitter=self.jitter,
             dtype=self.dtype,
         )
         atten_ = partial(
             AttentionBlock,
             inner_module=self.inner_module,
             bias=self.bias,
-            activation=self.activation,
-            activation_params=self.activation_params,
-            jitter=self.jitter,
-            dtype=self.dtype,
         )
         self.layers = nn.ModuleDict(
             {
                 "forward_": nn.ModuleList(
                     [
-                        atten_(i_dim * 2, o_dim),
+                        inner_(i_dim * 2, o_dim),
                         *(inner_(o_dim, o_dim) for _ in range(r_dim - 1)),
                     ]
                 ),
-                "backward_": inner_(r_dim * s_dim, i_dim),
+                "backward_": atten_(r_dim * s_dim, i_dim),
             }
         )
 
-        prev_state_ = torch.zeros((1, r_dim * s_dim), dtype=torch.float32)
-        self.register_buffer("prev_state_", prev_state_)
-        self.register_full_backward_hook(self._detach_prev_hook)
+        self.register_buffer("prev_state_", None, persistent=False)
+        self.register_buffer("cur_state_", None, persistent=False)
+        self.register_forward_pre_hook(self._forward_pre_hook)
 
     def reset_state(self):
-        """Resets the previous state of the recurrent block."""
-        self.prev_state_ = 0 * self.prev_state_
+        self.cur_state_ = None
+        self.prev_state_ = None
 
-    def _detach_prev_hook(self, module, grad_input, grad_output):
-        self.prev_state_ = self.prev_state_.detach()
+        for layer in self.layers["forward_"]:
+            if hasattr(layer, "reset_state"):
+                layer.reset_state()
+        layer = self.layers["backward_"]
+        if hasattr(layer, "reset_state"):
+            layer.reset_state()
+
+    def _forward_pre_hook(self, module: nn.Module, args: tuple):
+        """
+        This hook performs the forward pre-processing.
+        """
+        x = args[0]
+        r_dim = self.recurrent_dim
+        s_dim = self.state_dim
+
+        prev_state = self.cur_state_
+        if prev_state is None:
+            self.cur_state_ = torch.empty(
+                (x.shape[0], s_dim * r_dim, *x.shape[2:]), dtype=x.dtype
+            )
+            prev_state = torch.zeros_like(self.cur_state_)
+
+        self.prev_state_ = prev_state.detach()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -518,20 +541,14 @@ class RecurrentBlock(BaseBlock):
         Returns:
             torch.Tensor: The output tensor.
         """
-        r_dim = self.recurrent_dim
         s_dim = self.state_dim
-
-        if self.prev_state_.shape != (
-            new_shape := (x.shape[0], s_dim * r_dim, *x.shape[2:])
-        ):
-            self.prev_state_ = torch.zeros(new_shape, dtype=torch.float32)
 
         h = self.layers["backward_"](self.prev_state_)
         x = torch.cat([x, h], dim=1)
 
         for i, layer in enumerate(self.layers["forward_"]):
             x = layer(x)
-            self.prev_state_[:, i * s_dim : (i + 1) * s_dim] = x[:, :s_dim]
+            self.cur_state_[:, i * s_dim : (i + 1) * s_dim] = x[:, :s_dim]
 
         return x
 
