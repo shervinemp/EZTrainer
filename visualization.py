@@ -5,7 +5,7 @@ import torch.nn as nn
 from sklearn.metrics import auc, confusion_matrix, roc_curve
 from sklearn.manifold import TSNE
 from collections import defaultdict
-from modules import Affine
+from modules import AdaptiveBatchNorm
 from typing import List, Tuple, Dict
 
 from training import Evaluator
@@ -144,7 +144,7 @@ class Visualizer:
 
         affine_weights = []
         for _, m in model.named_modules():
-            if isinstance(m, Affine):
+            if isinstance(m, AdaptiveBatchNorm):
                 affine_weights.extend(m.weight.detach().abs().cpu().flatten().tolist())
         affine_weights = np.array(affine_weights)
 
