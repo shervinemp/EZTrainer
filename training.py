@@ -15,7 +15,6 @@ from torch.utils.data import DataLoader
 from collections import defaultdict
 from tqdm import tqdm
 from data_utils import DatasetInfo
-from regularization import ActivationRegularizer
 from typing import Any, Dict, Iterable, List, Tuple
 
 from data_utils import repeat
@@ -28,8 +27,6 @@ class OptimParams:
     optimizer: torch.optim.Optimizer
     epochs: int
     reg_factor: float
-    regularizer: callable = ActivationRegularizer
-    reg_period: int = 4
     device: torch.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
@@ -167,28 +164,13 @@ class Trainer(TrainingOperation):
         """
         output, out_of_dist = self.optim.model(inputs)
 
-        factor = out_of_dist.detach().abs().log1p()
-        main_loss = (factor * self.optim.criterion(output, labels)).mean()
+        factor = out_of_dist.detach().abs().sqrt()
+        main_loss = (
+            factor * (self.optim.criterion(output, labels)) + out_of_dist.square()
+        ).mean()
 
-        regs = self.reg_handler.get()
-
-        if self._cosine is None:
-
-            self._cosine = (
-                torch.tensor(2 * torch.pi * epoch / self.optim.reg_period)
-                .cos()
-                .add(2)
-                .div(4)
-            )
-
-        reg_term = (
-            torch.lerp(regs["energy"], regs["flow"], self._cosine)
-            .add(regs["sparsity"])
-            .mul(factor)
-            .mean()
-            .add(regs["quant"])
-        )
-        factor_term = (3 * out_of_dist.mean()) ** 2
+        reg_term = (factor * self.reg_handler()).mean()
+        factor_term = out_of_dist.mean()
 
         loss = main_loss + self.optim.reg_factor * (reg_term + factor_term)
 
@@ -206,7 +188,11 @@ class Trainer(TrainingOperation):
         optimizer = self.optim.optimizer
 
         evaluator = Evaluator(self.params, logger=self.logger)
-        self.reg_handler = self.optim.regularizer(model)
+        self.reg_handler = lambda: sum(
+            m.weight.abs().sum(dim=1).neg().exp().mean()
+            for m in model.modules()
+            if isinstance(m, nn.Linear)
+        )
 
         repeats = self.data.repeats
         recursions = self.data.recursions
@@ -224,38 +210,37 @@ class Trainer(TrainingOperation):
                 repeat(loader, repeats),
                 total=len(loader) * repeats,
             )
-            with self.reg_handler:
-                for i, (inputs, labels) in enumerate(pbar):
-                    inputs, labels = self._format_data(inputs, labels)
+            for i, (inputs, labels) in enumerate(pbar):
+                inputs, labels = self._format_data(inputs, labels)
 
-                    optimizer.zero_grad()
+                optimizer.zero_grad()
 
-                    t_total = inputs.shape[1]
-                    for t_step in range(t_total):
-                        inputs_step = inputs[:, t_step]
-                        labels_step = labels[:, t_step]
+                t_total = inputs.shape[1]
+                for t_step in range(t_total):
+                    inputs_step = inputs[:, t_step]
+                    labels_step = labels[:, t_step]
 
-                        for r_step in range(recursions):
-                            loss, (main_loss_step, reg_term_step, factor_step) = (
-                                self._iter(inputs_step, labels_step, epoch)
-                            )
-                            loss.backward()
+                    for r_step in range(recursions):
+                        loss, (main_loss_step, reg_term_step, factor_step) = self._iter(
+                            inputs_step, labels_step, epoch
+                        )
+                        loss.backward()
 
-                            denom = t_total * recursions
-                            metrics.update(
-                                {
-                                    "loss": main_loss_step.item() / denom,
-                                    "reg": reg_term_step.item() / denom,
-                                    "factor": factor_step.mean().item() / denom,
-                                }
-                            )
+                        denom = t_total * recursions
+                        metrics.update(
+                            {
+                                "loss": main_loss_step.item() / denom,
+                                "reg": reg_term_step.item() / denom,
+                                "factor": factor_step.mean().item() / denom,
+                            }
+                        )
 
-                        optimizer.step()
-                        model.reset_state()
+                    optimizer.step()
+                    model.reset_state()
 
-                    pbar.set_description(
-                        f"Epoch {epoch+1}/{self.optim.epochs} - @ {metrics['factor'] / (d:=i+1):.4f} - Loss: {metrics['loss'] / d:.4f} - Reg: {metrics['reg'] / d:.4f}"
-                    )
+                pbar.set_description(
+                    f"Epoch {epoch+1}/{self.optim.epochs} - @ {metrics['factor'] / (d:=i+1):.4f} - Loss: {metrics['loss'] / d:.4f} - Reg: {metrics['reg'] / d:.4f}"
+                )
 
             if self.logger:
                 self.logger.log_metrics(

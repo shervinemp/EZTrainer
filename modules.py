@@ -20,6 +20,7 @@ class AdaptiveBatchNorm(nn.Module):
         *,
         alpha: float = 0.95,
         eps: float = 0.01,
+        jitter: float = 1e-4,
         dtype: torch.dtype = torch.float32,
     ):
         super().__init__()
@@ -27,6 +28,8 @@ class AdaptiveBatchNorm(nn.Module):
         self.input_dim = input_dim
         self.alpha = alpha
         self.eps = eps
+        self.jitter = jitter
+        self.dtype = dtype
 
         self.weight: nn.Parameter = nn.Parameter(
             torch.ones((1, input_dim), dtype=dtype)
@@ -53,9 +56,10 @@ class AdaptiveBatchNorm(nn.Module):
         x_norm = (x - self.mean_ema) / (self.std_ema + self.eps)
 
         view_shape = self.weight.shape + (1,) * (len(x.shape) - 2)
-        w = self.weight.view(view_shape)
-        b = self.bias.view(view_shape)
-        o = (x_norm + b) * w
+        r = self.training * torch.rand(view_shape) * self.jitter
+        w = self.weight.view(view_shape) * r.exp()
+        b = self.bias.view(view_shape) - r
+        o = x_norm * w + b
 
         return o
 
@@ -617,7 +621,7 @@ class Network(nn.Module):
                     for task_dim in output_dim
                 ]
             ),
-            "distrib": inner_module(hidden_dim, 1, dtype=dtype),
+            "distrib": inner_module(hidden_dim, 1, bias=True, dtype=dtype),
         }
 
         self.layers = nn.ModuleDict(layers)

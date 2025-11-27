@@ -1,10 +1,8 @@
-from dataclasses import replace
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
 from lightning.pytorch.loggers import TensorBoardLogger
-from functools import partial
 import argparse
 import sys
 
@@ -25,7 +23,6 @@ from datasets import (
     load_energy_efficiency_dataset,
 )
 from modules import Network, UnitBlock, RecurrentBlock, PaddedConv2d
-from regularization import ActivationRegularizer
 from training import DataParams, Evaluator, OptimParams, Trainer, TrainParams
 from visualization import Visualizer
 
@@ -91,12 +88,6 @@ def main():
         type=float,
         default=1e-2,
         help="Regularization factor.",
-    )
-    parser.add_argument(
-        "--regularization_period",
-        type=int,
-        default=4,
-        help="The full cycle for regularization.",
     )
     parser.add_argument(
         "--batch_size",
@@ -201,9 +192,7 @@ def main():
         criterion=criterion,
         optimizer=optimizer,
         epochs=args.epochs,
-        regularizer=partial(ActivationRegularizer, module_type=inner_module),
         reg_factor=args.reg_factor,
-        reg_period=args.regularization_period,
         device=device,
     )
 
