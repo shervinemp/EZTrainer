@@ -166,7 +166,7 @@ class Trainer(TrainingOperation):
 
         factor = out_of_dist.detach().sqrt()
         main_loss = (
-            factor * self.optim.criterion(output, labels) + out_of_dist**2
+            factor * (self.optim.criterion(output, labels) + out_of_dist)
         ).mean()
         reg_term = (factor * self.reg_handler()).mean()
 
