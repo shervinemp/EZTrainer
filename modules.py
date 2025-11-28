@@ -644,7 +644,7 @@ class Network(nn.Module):
             outputs.append(o)
 
         o = torch.cat(outputs, dim=1)
-        d = self.layers["distrib"](x)
+        d = self.layers["distrib"](x).abs()
 
         if torch.is_complex(o):
             o = o.real

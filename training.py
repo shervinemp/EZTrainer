@@ -164,15 +164,13 @@ class Trainer(TrainingOperation):
         """
         output, out_of_dist = self.optim.model(inputs)
 
-        factor = out_of_dist.detach().abs().sqrt()
+        factor = out_of_dist.detach().sqrt()
         main_loss = (
-            factor * (self.optim.criterion(output, labels)) + out_of_dist.square()
+            factor * self.optim.criterion(output, labels) + out_of_dist**2
         ).mean()
-
         reg_term = (factor * self.reg_handler()).mean()
-        factor_term = out_of_dist.mean()
 
-        loss = main_loss + self.optim.reg_factor * (reg_term + factor_term)
+        loss = main_loss + self.optim.reg_factor * reg_term
 
         return loss, (main_loss, reg_term, factor)
 
