@@ -299,7 +299,7 @@ class Trainer(TrainingOperation):
                 if val_score >= self.running_score:
                     self.best_model = deepcopy(model)
                     print("-- New best model --")
-                    ratio = (0.66, 0.34)
+                    ratio = (0.5, 0.5)
 
                 self.running_score = (
                     self.running_score * ratio[0] + val_score * ratio[1]
