@@ -180,8 +180,9 @@ def main():
 
     lr_scale = 10 if data_info.is_timeseries else 1
     lr = args.lr * lr_scale
+    reg_factor = args.reg_factor
 
-    optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=lr)
+    optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=reg_factor)
 
     log_root = "logs"
     activation_name = "tanh" if data_info.is_classify else "silu"
@@ -197,7 +198,7 @@ def main():
         criterion=criterion,
         optimizer=optimizer,
         epochs=args.epochs,
-        reg_factor=args.reg_factor,
+        reg_factor=reg_factor,
         device=device,
     )
 
