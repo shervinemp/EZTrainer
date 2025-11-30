@@ -154,29 +154,34 @@ def main():
         f"{len(data_info.trainset)=}, {len(data_info.testset)=}, {len(data_info.valset)=}"
     )
 
+    hidden_dim = (
+        args.hidden_dim
+        // (7 * data_info.is_image + 1)
+        // (7 * data_info.is_timeseries + 1)
+    )
     inner_module = PaddedConv2d if data_info.is_image else nn.Linear
+    inner_block = (
+        RecurrentBlock if (data_info.is_timeseries or n_recurse > 1) else UnitBlock
+    )
+    activation = torch.tanh if data_info.is_classify else torch.nn.SiLU()
     model_args = {
         "input_dim": data_info.input_dim,
-        "hidden_dim": (
-            args.hidden_dim
-            // (7 * data_info.is_image + 1)
-            // (7 * data_info.is_timeseries + 1)
-        ),
+        "hidden_dim": hidden_dim,
         "n_hidden": args.n_hidden,
         "output_dim": data_info.n_targets,
         "inner_module": inner_module,
-        "inner_block": (
-            RecurrentBlock if (data_info.is_timeseries or n_recurse > 1) else UnitBlock
-        ),
-        "activation": torch.tanh if data_info.is_classify else torch.nn.SiLU(),
+        "inner_block": inner_block,
+        "activation": activation,
         "activation_params": {},
         "collapse_output": True,
         "dtype": torch.float32,
     }
     model = Network(**model_args)
 
-    lr = args.lr / (9 * data_info.is_timeseries + 1)
-    optimizer = optim.Adam(model.parameters(), lr=lr)
+    lr_scale = 10 if data_info.is_timeseries else 1
+    lr = args.lr * lr_scale
+
+    optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=lr)
 
     log_root = "logs"
     activation_name = "tanh" if data_info.is_classify else "silu"
