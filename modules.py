@@ -617,11 +617,11 @@ class Network(nn.Module):
             ),
             "output": nn.ModuleList(
                 [
-                    inner_module(hidden_dim, task_dim, bias=False, dtype=dtype)
+                    inner_module(hidden_dim, task_dim, dtype=dtype)
                     for task_dim in output_dim
                 ]
             ),
-            "distrib": inner_module(hidden_dim, 1, bias=True, dtype=dtype),
+            "distrib": inner_module(hidden_dim, 1, bias=False, dtype=dtype),
         }
 
         self.layers = nn.ModuleDict(layers)

@@ -147,7 +147,7 @@ class Trainer(TrainingOperation):
     """
 
     def _iter(
-        self, inputs: torch.Tensor, labels: torch.Tensor, epoch: int
+        self, inputs: torch.Tensor, labels: torch.Tensor
     ) -> Tuple[torch.Tensor, Tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
         """
         Performs a single training pass for a batch.
@@ -155,24 +155,30 @@ class Trainer(TrainingOperation):
         Args:
             inputs (torch.Tensor): The input tensor.
             labels (torch.Tensor): The labels tensor.
-            epoch (int): The current epoch number.
 
         Returns:
             Tuple[torch.Tensor, Tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
                 - The calculated loss.
-                - A tuple containing main_loss, reg_term, and factor.
+                - A tuple containing main_loss, reg_loss, and factor.
         """
-        output, out_of_dist = self.optim.model(inputs)
+        model = self.optim.model
+        output, out_of_dist = model(inputs)
 
-        factor = out_of_dist.detach().sqrt()
-        main_loss = (
-            factor * (self.optim.criterion(output, labels) + out_of_dist)
-        ).mean()
-        reg_term = (factor * self.reg_handler()).mean()
+        factor = out_of_dist.detach().clamp(max=10.0)
 
-        loss = main_loss + self.optim.reg_factor * reg_term
+        main_loss = self.optim.criterion(output, labels).mul(factor).mean()
+        reg_loss = (
+            sum(
+                m.weight.abs().sum(dim=1).neg().exp().mean()
+                for m in model.modules()
+                if isinstance(m, nn.Linear)
+            )
+            + out_of_dist.square().mean()
+        )
 
-        return loss, (main_loss, reg_term, factor)
+        loss = main_loss + reg_loss * self.optim.reg_factor
+
+        return loss, (main_loss, reg_loss, factor)
 
     def run(self) -> nn.Module | None:
         """
@@ -186,11 +192,6 @@ class Trainer(TrainingOperation):
         optimizer = self.optim.optimizer
 
         evaluator = Evaluator(self.params, logger=self.logger)
-        self.reg_handler = lambda: sum(
-            m.weight.abs().sum(dim=1).neg().exp().mean()
-            for m in model.modules()
-            if isinstance(m, nn.Linear)
-        )
 
         repeats = self.data.repeats
         recursions = self.data.recursions
@@ -219,8 +220,8 @@ class Trainer(TrainingOperation):
                     labels_step = labels[:, t_step]
 
                     for r_step in range(recursions):
-                        loss, (main_loss_step, reg_term_step, factor_step) = self._iter(
-                            inputs_step, labels_step, epoch
+                        loss, (main_loss_step, reg_loss_step, factor_step) = self._iter(
+                            inputs_step, labels_step
                         )
                         loss.backward()
 
@@ -228,7 +229,7 @@ class Trainer(TrainingOperation):
                         metrics.update(
                             {
                                 "loss": main_loss_step.item() / denom,
-                                "reg": reg_term_step.item() / denom,
+                                "reg": reg_loss_step.item() / denom,
                                 "factor": factor_step.mean().item() / denom,
                             }
                         )
