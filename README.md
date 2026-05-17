@@ -52,7 +52,7 @@ python main.py --dataset fairface --epochs 30 --dropout 0.1
 
 | Argument | Default | Description |
 |----------|---------|-------------|
-| `--dataset` | (required) | Dataset name (`mnist`, `fairface`, `credit_card_fraud`, `heart_failure`, `insurance`, `time_series`, `air_quality`, `uci_adult`, `obesity`, `boston_house_price`, etc.) |
+| `--dataset` | (required) | Dataset name: `mnist`, `fairface`, `credit_risk`, `credit_card_fraud`, `heart_failure`, `insurance`, `time_series`, `air_quality`, `uci_adult`, `playground_s5e3`, `obesity`, `boston_house_price`, `concrete_compressive_strength`, `energy_efficiency` |
 | `--epochs` | 50 | Number of training epochs |
 | `--hidden_dim` | 512 | Hidden dimension (adjusted for images/time-series) |
 | `--n_hidden` | 16 | Number of hidden layers |
