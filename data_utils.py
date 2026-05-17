@@ -9,7 +9,6 @@ import numpy as np
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import MinMaxScaler, StandardScaler
 from torch.utils.data import TensorDataset
-from imblearn.over_sampling import RandomOverSampler
 import torch
 from torch.utils.data import Dataset
 
@@ -170,6 +169,7 @@ def dataset_from_numpy(
 
     # Supersampling (if classification)
     if classify and oversample:
+        from imblearn.over_sampling import RandomOverSampler
         ros = RandomOverSampler(random_state=random_state)
         X_train, y_train = ros.fit_resample(X_train, y_train)
 

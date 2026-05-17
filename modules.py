@@ -52,10 +52,13 @@ class AdaptiveBatchNorm(nn.Module):
         self.register_full_backward_hook(self._backward_hook)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x_norm = (x - self.mean_ema) / (self.std_ema + self.eps)
+        extra_dims = (1,) * (x.dim() - 2)
+        mean = self.mean_ema.view(1, -1, *extra_dims)
+        std = self.std_ema.view(1, -1, *extra_dims)
+        x_norm = (x - mean) / (std + self.eps)
 
-        view_shape = self.weight.shape + (1,) * (len(x.shape) - 2)
-        r = self.training * torch.rand(view_shape) * self.jitter
+        view_shape = self.weight.shape + extra_dims
+        r = self.training * torch.rand(view_shape, device=x.device) * self.jitter
         w = self.weight.view(view_shape) * r.exp()
         b = self.bias.view(view_shape) - r
         o = x_norm * w + b
@@ -67,25 +70,26 @@ class AdaptiveBatchNorm(nn.Module):
 
     @torch.no_grad()
     def _forward_pre_hook(self, module: nn.Module, args: tuple):
-        """
-        This hook performs the adaptive update, using stats accumulated across all previous forward calls.
-        """
-
         if not self.training:
             return
 
         x = args[0]
 
+        if x.dim() > 2:
+            x_flat = x.transpose(1, -1).reshape(-1, self.input_dim)
+        else:
+            x_flat = x
+
         old_count = self._count.clone()
         old_mean = self.mean_ema
         old_std = self.std_ema
 
-        self._count += x.shape[0]
+        self._count += x_flat.shape[0]
 
         if old_count == 0:
             if old_mean is None:
-                self.mean_ema = torch.mean(x, dim=0, keepdim=True).detach()
-                self.std_ema = torch.std(x, dim=0, keepdim=True).detach()
+                self.mean_ema = torch.mean(x_flat, dim=0, keepdim=True).detach()
+                self.std_ema = torch.std(x_flat, dim=0, keepdim=True).detach()
             else:
                 c_std = torch.clamp(self._cum_mean_sq - self._cum_mean**2, 0.0) ** 0.5
                 factor = 1 - self.alpha
@@ -96,8 +100,8 @@ class AdaptiveBatchNorm(nn.Module):
             self._cum_mean.zero_()
             self._cum_mean_sq.zero_()
 
-        self._cum_mean += (x - self._cum_mean).sum(dim=0, keepdim=True) / self._count
-        self._cum_mean_sq += (x**2 - self._cum_mean_sq).sum(
+        self._cum_mean += (x_flat - self._cum_mean).sum(dim=0, keepdim=True) / self._count
+        self._cum_mean_sq += (x_flat**2 - self._cum_mean_sq).sum(
             dim=0, keepdim=True
         ) / self._count
 
@@ -658,7 +662,7 @@ class Network(nn.Module):
         if self.collapse_output and (dims := tuple(range(2, len(o.shape)))):
             o = o.mean(dim=dims)
 
-        log_var = self.layers["distrib"](x)
+        log_var = self.layers["log_var"](x)
         if torch.is_complex(log_var):
             log_var = log_var.real
         if self.collapse_output and (dims := tuple(range(2, len(log_var.shape)))):
