@@ -11,6 +11,7 @@ from sklearn.metrics import (
 )
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from collections import defaultdict
 from tqdm import tqdm
@@ -141,6 +142,173 @@ class TrainingOperation:
         return getattr(self.params, name)
 
 
+class FocalLoss(nn.Module):
+    # ... (rest of __init__ is unchanged) ...
+    def __init__(
+        self,
+        gamma=2,
+        alpha=None,
+        reduction="mean",
+        task_type="binary",
+        num_classes=None,
+    ):
+        """
+        Unified Focal Loss class for binary, multi-class, and multi-label classification tasks.
+        """
+        super(FocalLoss, self).__init__()
+        self.gamma = gamma
+        self.alpha = alpha
+        self.reduction = reduction
+        self.task_type = task_type
+        self.num_classes = num_classes
+
+        # Handle alpha for class balancing in multi-class tasks
+        if (
+            task_type == "multi-class"
+            and alpha is not None
+            and isinstance(alpha, (list, torch.Tensor))
+        ):
+            assert (
+                num_classes is not None
+            ), "num_classes must be specified for multi-class classification"
+            if isinstance(alpha, list):
+                self.alpha = torch.Tensor(alpha)
+            else:
+                self.alpha = alpha
+
+    def forward(self, inputs, targets):
+        # ... (forward pass logic unchanged) ...
+        if self.task_type == "binary":
+            return self.binary_focal_loss(inputs, targets)
+        elif self.task_type == "multi-class":
+            return self.multi_class_focal_loss(inputs, targets)
+        elif self.task_type == "multi-label":
+            return self.multi_label_focal_loss(inputs, targets)
+        else:
+            raise ValueError(
+                f"Unsupported task_type '{self.task_type}'. Use 'binary', 'multi-class', or 'multi-label'."
+            )
+
+    def binary_focal_loss(self, inputs, targets):
+        """Focal loss for binary classification."""
+        # Ensure targets are float type as expected by BCEWL
+        targets = targets.float()
+
+        # Compute binary cross entropy
+        # CHANGE THIS LINE: Use F.binary_cross_entropy_with_logits instead of F.cross_entropy
+        bce_loss = F.binary_cross_entropy_with_logits(inputs, targets, reduction="none")
+
+        # Compute focal weight
+        p_t = torch.sigmoid(inputs)  # Move sigmoid calculation here for clarity
+        p_t = p_t * targets + (1 - p_t) * (1 - targets)
+        focal_weight = (1 - p_t) ** self.gamma
+
+        # Apply alpha if provided
+        if self.alpha is not None:
+            alpha_t = self.alpha * targets + (1 - self.alpha) * (1 - targets)
+            bce_loss = alpha_t * bce_loss
+
+        # Apply focal loss weighting
+        loss = focal_weight * bce_loss
+
+        if self.reduction == "mean":
+            return loss.mean()
+        elif self.reduction == "sum":
+            return loss.sum()
+        return loss
+
+    # ... (multi_class_focal_loss and multi_label_focal_loss are unchanged) ...
+    def multi_class_focal_loss(self, inputs, targets):
+        """Focal loss for multi-class classification."""
+        if self.alpha is not None:
+            alpha = self.alpha.to(inputs.device)
+
+        # Convert logits to probabilities with softmax
+        probs = F.softmax(inputs, dim=1)
+        targets = targets.long()  # Ensure targets are long for one_hot
+
+        # One-hot encode the targets
+        targets_one_hot = F.one_hot(targets, num_classes=self.num_classes).float()
+
+        # Compute cross-entropy for each class
+        # Note: Using -log(probs) is numerically less stable than F.cross_entropy directly
+        ce_loss = -targets_one_hot * torch.log(probs.clamp(min=1e-6))
+
+        # Compute focal weight
+        p_t = torch.sum(probs * targets_one_hot, dim=1)  # p_t for each sample
+        focal_weight = (1 - p_t) ** self.gamma
+
+        # Apply alpha if provided (per-class weighting)
+        if self.alpha is not None:
+            alpha_t = alpha.gather(0, targets)
+            ce_loss = alpha_t.unsqueeze(1) * ce_loss
+
+        # Apply focal loss weight
+        loss = focal_weight.unsqueeze(1) * ce_loss
+
+        if self.reduction == "mean":
+            return loss.mean()
+        elif self.reduction == "sum":
+            return loss.sum()
+        return loss
+
+    def multi_label_focal_loss(self, inputs, targets):
+        """Focal loss for multi-label classification."""
+        # Ensure targets are float type as expected by BCEWL
+        targets = targets.float()
+        probs = torch.sigmoid(inputs)
+
+        # Compute binary cross entropy
+        bce_loss = F.binary_cross_entropy_with_logits(inputs, targets, reduction="none")
+
+        # Compute focal weight
+        p_t = probs * targets + (1 - probs) * (1 - targets)
+        focal_weight = (1 - p_t) ** self.gamma
+
+        # Apply alpha if provided
+        if self.alpha is not None:
+            # Note: Alpha handling might need adjustment if self.alpha is intended to be a scalar/single tensor
+            alpha_t = self.alpha * targets + (1 - self.alpha) * (1 - targets)
+            bce_loss = alpha_t * bce_loss
+
+        # Apply focal loss weight
+        loss = focal_weight * bce_loss
+
+        if self.reduction == "mean":
+            return loss.mean()
+        elif self.reduction == "sum":
+            return loss.sum()
+        return loss
+
+
+class MultiTaskFocalLoss(nn.Module):
+    def __init__(self, task_dims: Tuple[int, ...], gamma=2, reduction="mean"):
+        super().__init__()
+        self.task_dims = task_dims
+        self.gamma = gamma
+        self.reduction = reduction
+
+    def forward(self, inputs, targets):
+        splits = list(self.task_dims)
+        input_splits = torch.split(inputs, splits, dim=-1)
+        target_splits = torch.split(targets, splits, dim=-1)
+
+        total_loss = 0
+        for o, t in zip(input_splits, target_splits):
+            t_class = t.argmax(dim=-1)
+            ce_loss = F.cross_entropy(o, t_class, reduction="none")
+            probs = F.softmax(o, dim=-1)
+            p_t = probs.gather(1, t_class.unsqueeze(-1)).squeeze(-1)
+            focal_weight = (1 - p_t) ** self.gamma
+            total_loss = total_loss + ce_loss * focal_weight
+
+        if self.reduction == "mean":
+            return total_loss.mean()
+        elif self.reduction == "sum":
+            return total_loss.sum()
+        return total_loss
+
+
 class Trainer(TrainingOperation):
     """
     Trains a neural network model.
@@ -149,36 +317,20 @@ class Trainer(TrainingOperation):
     def _iter(
         self, inputs: torch.Tensor, labels: torch.Tensor
     ) -> Tuple[torch.Tensor, Tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
-        """
-        Performs a single training pass for a batch.
-
-        Args:
-            inputs (torch.Tensor): The input tensor.
-            labels (torch.Tensor): The labels tensor.
-
-        Returns:
-            Tuple[torch.Tensor, Tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
-                - The calculated loss.
-                - A tuple containing main_loss, reg_loss, and factor.
-        """
         model = self.optim.model
-        output, out_of_dist = model(inputs)
+        output, log_var = model(inputs)
 
-        factor = out_of_dist.detach().clamp(max=10.0)
+        task_loss = self.optim.criterion(output, labels)
+        if task_loss.dim() > 1:
+            task_loss = task_loss.mean(dim=tuple(range(1, task_loss.dim())))
 
-        main_loss = self.optim.criterion(output, labels).mul(factor).mean()
-        reg_loss = (
-            sum(
-                m.weight.abs().sum(dim=1).neg().exp().mean()
-                for m in model.modules()
-                if isinstance(m, nn.Linear)
-            )
-            + out_of_dist.square().mean()
-        )
+        log_var = log_var.squeeze(-1).clamp(min=-10, max=10)
+        precision = (-log_var).exp()
+        main_loss = (precision * task_loss).mean()
+        reg_loss = 0.5 * log_var.mean()
+        loss = main_loss + reg_loss
 
-        loss = main_loss + reg_loss * self.optim.reg_factor
-
-        return loss, (main_loss, reg_loss, factor)
+        return loss, (main_loss.detach(), reg_loss.detach(), precision.mean().detach())
 
     def run(self) -> nn.Module | None:
         """
@@ -196,14 +348,17 @@ class Trainer(TrainingOperation):
         repeats = self.data.repeats
         recursions = self.data.recursions
 
-        self.running_score = None
+        self.best_score = -float("inf")
         self.best_model = None
+
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer, mode="max", factor=0.5, patience=5, min_lr=1e-6
+        )
 
         metrics = RunningMetrics()
         model.train()
         for epoch in range(self.optim.epochs):
             metrics.reset()
-            self._cosine = None
             loader = self._get_loader("train")
             pbar = tqdm(
                 repeat(loader, repeats),
@@ -212,6 +367,7 @@ class Trainer(TrainingOperation):
             for i, (inputs, labels) in enumerate(pbar):
                 inputs, labels = self._format_data(inputs, labels)
 
+                model.reset_state()
                 optimizer.zero_grad()
 
                 t_total = inputs.shape[1]
@@ -223,22 +379,21 @@ class Trainer(TrainingOperation):
                         loss, (main_loss_step, reg_loss_step, factor_step) = self._iter(
                             inputs_step, labels_step
                         )
+                        loss = loss / (t_total * recursions)
                         loss.backward()
-
-                        denom = t_total * recursions
                         metrics.update(
                             {
-                                "loss": main_loss_step.item() / denom,
-                                "reg": reg_loss_step.item() / denom,
-                                "factor": factor_step.mean().item() / denom,
+                                "loss": main_loss_step.item() / (t_total * recursions),
+                                "reg": reg_loss_step.item() / (t_total * recursions),
+                                "factor": factor_step.mean().item() / (t_total * recursions),
                             }
                         )
 
-                    optimizer.step()
-                    model.reset_state()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                optimizer.step()
 
                 pbar.set_description(
-                    f"Epoch {epoch+1}/{self.optim.epochs} - @ {metrics['factor'] / (d:=i+1):.4f} - Loss: {metrics['loss'] / d:.4f} - Reg: {metrics['reg'] / d:.4f}"
+                    f"Epoch {epoch+1}/{self.optim.epochs} - @ {metrics['factor'] / max(1, i+1):.4f} - Loss: {metrics['loss'] / max(1, i+1):.4f} - Reg: {metrics['reg'] / max(1, i+1):.4f}"
                 )
 
             if self.logger:
@@ -264,12 +419,19 @@ class Trainer(TrainingOperation):
 
                 evaluation = evaluator("val")
                 if self.data.info.is_classify:
-                    acc, auc, f1 = itemgetter("acc", "auc", "f1")(evaluation.report)
-                    val_score = auc + (f1**0.5).mean()
-
-                    print(
-                        f"* Val Loss: {val_metrics['loss']:.4f} - Acc: {acc:.4f} - AUC: {auc:.4f} - F1: {f1}"
-                    )
+                    n_targets = self.data.info.n_targets
+                    if isinstance(n_targets, tuple):
+                        task_accs = [evaluation.report.get(f"task_{i}_acc", 0) for i in range(len(n_targets))]
+                        val_score = np.mean(task_accs)
+                        print(
+                            f"* Val Loss: {val_metrics['loss']:.4f} - Task Accs: {[f'{a:.4f}' for a in task_accs]}"
+                        )
+                    else:
+                        acc, auc, f1 = itemgetter("acc", "auc", "f1")(evaluation.report)
+                        val_score = auc + (f1**0.5).mean()
+                        print(
+                            f"* Val Loss: {val_metrics['loss']:.4f} - Acc: {acc:.4f} - AUC: {auc:.4f} - F1: {f1}"
+                        )
                 else:
                     mae, mse = itemgetter("mae", "mse")(evaluation.report)
                     val_score = -(mae + mse**0.5)
@@ -292,18 +454,12 @@ class Trainer(TrainingOperation):
                         epoch,
                     )
 
-                if self.best_model is None:
-                    self.running_score = val_score
+                scheduler.step(val_score)
 
-                ratio = (0.99, 0.01)
-                if val_score >= self.running_score:
+                if val_score > self.best_score:
+                    self.best_score = val_score
                     self.best_model = deepcopy(model)
                     print("-- New best model --")
-                    ratio = (0.5, 0.5)
-
-                self.running_score = (
-                    self.running_score * ratio[0] + val_score * ratio[1]
-                )
 
         return self.best_model
 
@@ -345,8 +501,21 @@ class Evaluator(TrainingOperation):
                         predicted = output.cpu()
                         proba = predicted
                     else:
-                        proba = torch.softmax(output, dim=1).cpu()
-                        predicted = torch.argmax(proba, dim=1).cpu()
+                        n_targets = self.data.info.n_targets
+                        if isinstance(n_targets, tuple):
+                            splits = list(n_targets)
+                            output_parts = torch.split(output, splits, dim=-1)
+                            proba_parts = []
+                            pred_parts = []
+                            for o in output_parts:
+                                p = torch.softmax(o, dim=-1)
+                                proba_parts.append(p)
+                                pred_parts.append(torch.argmax(p, dim=-1))
+                            proba = torch.cat(proba_parts, dim=-1).cpu()
+                            predicted = torch.stack(pred_parts, dim=-1).cpu()
+                        else:
+                            proba = torch.softmax(output, dim=1).cpu()
+                            predicted = torch.argmax(proba, dim=1).cpu()
 
                     y_true.extend(labels_step.cpu().numpy())
                     y_pred.extend(predicted.numpy())
@@ -357,29 +526,49 @@ class Evaluator(TrainingOperation):
         y_proba_np = np.array(y_proba)
 
         if self.data.info.is_classify:
-            acc = accuracy_score(y_true_np, y_pred_np)
-            if isinstance((n_ := self.data.info.n_targets), int) and n_ == 2:
-                auc = roc_auc_score(
-                    y_true_np, [p for _, p in y_proba_np], average="macro"
-                )
+            n_targets = self.data.info.n_targets
+            if isinstance(n_targets, tuple):
+                report = {}
+                splits = list(n_targets)
+                cum_splits = np.cumsum(splits)
+                y_true_task = np.split(y_true_np, cum_splits[:-1], axis=1)
+                y_proba_task = np.split(y_proba_np, cum_splits[:-1], axis=1)
+                for i, (yt, ypr, dim) in enumerate(
+                    zip(y_true_task, y_proba_task, splits)
+                ):
+                    yt_class = np.argmax(yt, axis=1)
+                    yp_class = y_pred_np[:, i]
+                    acc = accuracy_score(yt_class, yp_class)
+                    if dim == 2:
+                        try:
+                            auc_val = roc_auc_score(yt_class, ypr[:, 1], average="macro")
+                            report[f"task_{i}_auc"] = auc_val
+                        except ValueError:
+                            pass
+                    report[f"task_{i}_acc"] = acc
             else:
-                auc = roc_auc_score(
-                    y_true_np, y_proba_np, multi_class="ovr", average="macro"
-                )
+                if n_targets == 2:
+                    auc = roc_auc_score(
+                        y_true_np, [p for _, p in y_proba_np], average="macro"
+                    )
+                else:
+                    auc = roc_auc_score(
+                        y_true_np, y_proba_np, multi_class="ovr", average="macro"
+                    )
 
-            kwargs = {"average": None, "zero_division": 0}
+                kwargs = {"average": None, "zero_division": 0}
+                acc = accuracy_score(y_true_np, y_pred_np)
+                prec = precision_score(y_true_np, y_pred_np, **kwargs)
+                rec = recall_score(y_true_np, y_pred_np, **kwargs)
+                f1 = f1_score(y_true_np, y_pred_np, **kwargs)
 
-            prec = precision_score(y_true_np, y_pred_np, **kwargs)
-            rec = recall_score(y_true_np, y_pred_np, **kwargs)
-            f1 = f1_score(y_true_np, y_pred_np, **kwargs)
-
-            report = {
-                "acc": acc,
-                "auc": auc,
-                "precision": prec,
-                "recall": rec,
-                "f1": f1,
-            }
+                report = {
+                    "acc": acc,
+                    "auc": auc,
+                    "precision": prec,
+                    "recall": rec,
+                    "f1": f1,
+                }
         else:
             mae = np.abs(np.array(y_true_np) - np.array(y_pred_np)).mean()
             mse = np.square(np.array(y_true_np) - np.array(y_pred_np)).mean()

@@ -4,7 +4,9 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 from lightning.pytorch.loggers import TensorBoardLogger
 import argparse
+import random
 import sys
+import numpy as np
 
 from datasets import (
     load_time_series_dataset,
@@ -23,7 +25,7 @@ from datasets import (
     load_energy_efficiency_dataset,
 )
 from modules import Network, UnitBlock, RecurrentBlock, PaddedConv2d
-from training import DataParams, Evaluator, OptimParams, Trainer, TrainParams
+from training import DataParams, Evaluator, FocalLoss, MultiTaskFocalLoss, OptimParams, Trainer, TrainParams
 from visualization import Visualizer
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -107,8 +109,26 @@ def main():
         default=1,
         help="Number of recursions for each data point. Forces time-series behaviour.",
     )
+    parser.add_argument(
+        "--dropout",
+        type=float,
+        default=0.0,
+        help="Dropout probability for hidden layers.",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Random seed for reproducibility.",
+    )
 
     args = parser.parse_args()
+
+    if args.seed is not None:
+        torch.manual_seed(args.seed)
+        torch.cuda.manual_seed_all(args.seed)
+        np.random.seed(args.seed)
+        random.seed(args.seed)
 
     dataset_name = args.dataset
     if dataset_name not in DATASET_LOADERS:
@@ -156,14 +176,14 @@ def main():
 
     hidden_dim = (
         args.hidden_dim
-        // (7 * data_info.is_image + 1)
-        // (7 * data_info.is_timeseries + 1)
+        // (4 * data_info.is_image + 1)
+        // (4 * data_info.is_timeseries + 1)
     )
     inner_module = PaddedConv2d if data_info.is_image else nn.Linear
     inner_block = (
         RecurrentBlock if (data_info.is_timeseries or n_recurse > 1) else UnitBlock
     )
-    activation = torch.tanh if data_info.is_classify else torch.nn.SiLU()
+    activation = nn.Tanh() if data_info.is_classify else nn.SiLU()
     model_args = {
         "input_dim": data_info.input_dim,
         "hidden_dim": hidden_dim,
@@ -173,6 +193,7 @@ def main():
         "inner_block": inner_block,
         "activation": activation,
         "activation_params": {},
+        "dropout": args.dropout,
         "collapse_output": True,
         "dtype": torch.float32,
     }
@@ -189,9 +210,32 @@ def main():
     log_name = f"main_model_{activation_name}_{lr}"
     logger = TensorBoardLogger(log_root, log_name)
 
-    criterion = (
-        nn.CrossEntropyLoss(reduction="none") if data_info.is_classify else nn.MSELoss()
-    )
+    if data_info.is_classify:
+        n_targets = data_info.n_targets
+        if isinstance(n_targets, tuple):
+            criterion = MultiTaskFocalLoss(
+                task_dims=n_targets,
+                gamma=2,
+                reduction="none",
+            )
+        elif n_targets == 2:
+            criterion = FocalLoss(
+                task_type="binary",
+                num_classes=n_targets,
+                gamma=2,
+                alpha=None,
+                reduction="none",
+            )
+        else:
+            criterion = FocalLoss(
+                task_type="multi-class",
+                num_classes=n_targets,
+                gamma=2,
+                alpha=None,
+                reduction="none",
+            )
+    else:
+        criterion = nn.MSELoss(reduction="none")
 
     optim_params = OptimParams(
         model=model,

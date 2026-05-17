@@ -359,30 +359,14 @@ def load_cifar10_dataset() -> DatasetInfo:
 
 
 def load_fairface_dataset(root_dir: str = ".") -> DatasetInfo:
-    """
-    Loads the FairFace dataset for multi-label classification.
-
-    Args:
-        root_dir (str): The root directory where the dataset files are located.
-
-    Returns:
-        tuple: A tuple containing the train, test, and validation datasets, and the task configuration.
-    """
     file_ids = [
         "1Z1RqRo0_JiavaZw2yzZG6WETdZQ8qX86",
         "1i1L3Yqwaio7YSOCj7ftgk8ZZchPG7dmH",
         "1wOdja-ezstMEp81tX1a-EYkFebev4h7D",
     ]
-    local_file_path = (
-        "/content/"  # Assuming running in Colab or similar env with /content/
-    )
 
     for file_id in file_ids:
-        download_file_from_drive(file_id, local_file_path)
-
-    # Assuming the zip file is extracted to the current directory or root_dir
-    # You might need to add unzip commands here if not handled externally
-    # Example: subprocess.run(['unzip', '-qq', 'fairface-img-margin025-trainval.zip'], check=True)
+        download_file_from_drive(file_id, root_dir)
 
     transform = transforms.Compose(
         [

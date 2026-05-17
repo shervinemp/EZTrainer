@@ -655,6 +655,7 @@ class FaissDatabase:
         vectors_to_add = []
         metadata_to_add = []
         faiss_ids_to_remove = []
+        valid_update_ids = set()
 
         with self._lock:
             try:
@@ -664,9 +665,10 @@ class FaissDatabase:
                             faiss_id_to_remove = self._object_id_to_faiss_id[obj_id]
                             faiss_ids_to_remove.append(faiss_id_to_remove)
                             del self._object_id_to_faiss_id[obj_id]
+                            valid_update_ids.add(obj_id)
                         else:
                             logger.warning(
-                                f"Object ID {obj_id} not found for update. Skipping removal."
+                                f"Object ID {obj_id} not found for update. Skipping."
                             )
 
                     if faiss_ids_to_remove:
@@ -694,6 +696,8 @@ class FaissDatabase:
                                         )
 
                 for obj_id, vector_np, properties_dict in data_objects:
+                    if not is_create and obj_id not in valid_update_ids:
+                        continue
                     if vector_np.shape[0] != self.vector_dim:
                         logger.error(
                             f"Vector dimension mismatch for object {obj_id}. Expected {self.vector_dim}, got {vector_np.shape[0]}. Skipping."

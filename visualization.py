@@ -273,36 +273,31 @@ class Visualizer:
         self,
         num_examples: int = 10,
     ):
-        """
-        Plots a specified number of misclassified examples based on provided true labels, predictions, and probabilities.
+        p = self.evaluator.params
+        if not p.data.info.is_classify:
+            print("Misclassified examples plotting is only for classification tasks.")
+            return
 
-        Args:
-            y_true (np.ndarray): True labels.
-            y_pred (np.ndarray): Predicted labels or values.
-            y_proba (np.ndarray): Predicted probabilities (for classification).
-            num_examples (int, optional): The number of misclassified examples to plot.
-                Defaults to 10.
-        """
+        n_targets = p.data.info.n_targets
+        if isinstance(n_targets, tuple):
+            print("Misclassified examples plotting is not supported for multi-task.")
+            return
+
         evaluation = self.evaluator()
 
         y_true = evaluation.y_true
         y_pred = evaluation.y_pred
         y_proba = evaluation.y_proba
 
-        if not self.classify:
-            print("Misclassified examples plotting is only for classification tasks.")
-            return
-
         misclassified_indices = np.where(y_true != y_pred)[0]
         if len(misclassified_indices) == 0:
             print("No misclassified examples found.")
             return
 
-        # Get the original images corresponding to the misclassified indices
-
         misclassified_images: List[np.ndarray] = []
         current_index = 0
-        for inputs, _ in self.data_loader:
+        loader = self.evaluator._get_loader("test")
+        for inputs, _ in loader:
             inputs = inputs.cpu().numpy()
             batch_size = inputs.shape[0]
             indices_in_batch = (
@@ -335,22 +330,20 @@ class Visualizer:
 
         plt.figure(figsize=(10 * num_cols / 5, 5 * num_rows / 2))
         for i, img in enumerate(misclassified_images[:num_examples]):
-            # Check if the data point is suitable for image plotting
             if img.ndim in [2, 3]:
                 plt.subplot(num_rows, num_cols, i + 1)
-                if img.ndim == 2:  # Grayscale image
+                if img.ndim == 2:
                     plt.imshow(img, cmap="gray")
-                elif img.shape[0] == 1:  # Grayscale image with channel dimension
+                elif img.shape[0] == 1:
                     plt.imshow(img.squeeze(0), cmap="gray")
-                else:  # Color image
+                else:
                     plt.imshow(np.transpose(img, (1, 2, 0)))
 
                 plt.title(
-                    f"T: {(l_:=misclassified_labels[i])} ({probas[i][l_]:.2f}), P: {(o:=misclassified_predictions[i])} ({probas[i][o]:.2f})"
+                    f"T: {(l_:=int(misclassified_labels[i]))} ({probas[i][l_]:.2f}), P: {(o:=int(misclassified_predictions[i]))} ({probas[i][o]:.2f})"
                 )
                 plt.axis("off")
             else:
-                # Print feature values, true label, and predicted label for tabular data
                 print(f"Misclassified example {i}:")
                 print(f"  Features: {img}")
                 print(f"  True Label: {misclassified_labels[i]}")
@@ -427,23 +420,14 @@ class Visualizer:
             )
             plt.show()
 
-    def display_metrics(self):
-        """
-        Evaluates the model using the provided Evaluator and displays the metrics.
-        """
-        evaluation = self.evaluator()
-
-        metrics = evaluation["metrics"]
-        report = evaluation["report"]
+    def display_metrics(self, section: str = "test"):
+        evaluation = self.evaluator(section=section)
+        report = evaluation.report
 
         print("\n--- Evaluation Metrics ---")
-        if self.classify:
-            print(f"Accuracy: {metrics[0]:.4f}")
-            print(f"AUC: {metrics[1]:.4f}")
-            print("Classification Report:")
-            for metric_name, values in report.items():
-                print(f"  {metric_name.capitalize()}: {values}")
-        else:
-            print(f"MAE: {metrics[0]:.4f}")
-            print(f"MSE: {metrics[1]:.4f}")
+        for metric_name, scores in report.items():
+            if isinstance(scores, np.ndarray):
+                print(f"  {metric_name}: {scores}")
+            else:
+                print(f"  {metric_name}: {scores}")
         print("--------------------------\n")

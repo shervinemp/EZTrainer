@@ -4,6 +4,7 @@ import os
 import subprocess
 import zipfile
 from typing import Iterable, List, Optional, Tuple, Union
+import requests
 import numpy as np
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import MinMaxScaler, StandardScaler
@@ -66,19 +67,20 @@ def _download_and_extract_kaggle_dataset(
 
     print(f"Downloading dataset from {download_url}...")
     try:
-        # Use curl to download the zip file
-        subprocess.run(["curl", "-L", "-o", zip_file_name, download_url], check=True)
+        response = requests.get(download_url, stream=True, timeout=300)
+        response.raise_for_status()
+        with open(zip_file_name, "wb") as f:
+            for chunk in response.iter_content(chunk_size=8192):
+                f.write(chunk)
         print("Download complete. Extracting files...")
-        # Use zipfile to extract the necessary files
         with zipfile.ZipFile(zip_file_name, "r") as zip_ref:
             f_ = filenames_to_extract or zip_ref.namelist()
             for filename in f_:
                 zip_ref.extract(filename)
         print("Extraction complete.")
-        os.remove(zip_file_name)  # Clean up the zip file
+        os.remove(zip_file_name)
     except Exception as e:
         print(f"Error downloading or extracting dataset: {e}")
-        # Exit or raise an error if dataset cannot be loaded
         raise FileNotFoundError(
             f"Could not load dataset. Download or extraction failed: {e}"
         )

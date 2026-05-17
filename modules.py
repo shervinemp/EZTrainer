@@ -1,7 +1,6 @@
 from typing import Any, Callable
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
 from abc import ABC, abstractmethod
 from functools import partial
@@ -278,8 +277,8 @@ class UnitBlock(BaseBlock):
             Defaults to torch.tanh.
         activation_params (dict, optional): Additional parameters for the activation
             function. Defaults to None.
-        jitter (float, optional): Jitter parameter for the AffineBlock.
-            Defaults to 0.005.
+        dropout (float, optional): Dropout probability. 0 disables dropout.
+            Defaults to 0.0.
         dtype (torch.dtype, optional): Data type for the layers.
             Defaults to torch.float32.
     """
@@ -293,6 +292,7 @@ class UnitBlock(BaseBlock):
         activation: nn.Module | Callable = torch.tanh,
         *,
         activation_params: dict = None,
+        dropout: float = 0.0,
         dtype: torch.dtype = torch.float32,
     ):
         super().__init__()
@@ -301,22 +301,23 @@ class UnitBlock(BaseBlock):
         self.output_dim = output_dim
         self.inner_module = inner_module
 
-        self.layers = nn.ModuleDict(
-            {
-                "affine": AffineBlock(
-                    input_dim=input_dim,
-                    output_dim=output_dim,
-                    inner_module=inner_module,
-                    bias=bias,
-                    dtype=dtype,
-                ),
-                "skip": SkipBlock(
-                    input_dim=output_dim,
-                    activation=activation,
-                    activation_params=activation_params or {},
-                ),
-            }
-        )
+        layers = {
+            "affine": AffineBlock(
+                input_dim=input_dim,
+                output_dim=output_dim,
+                inner_module=inner_module,
+                bias=bias,
+                dtype=dtype,
+            ),
+            "skip": SkipBlock(
+                input_dim=output_dim,
+                activation=activation,
+                activation_params=activation_params or {},
+            ),
+        }
+        if dropout > 0:
+            layers["dropout"] = nn.Dropout(dropout)
+        self.layers = nn.ModuleDict(layers)
 
     def reset_state(self):
         """Resets the state of the inner blocks."""
@@ -334,6 +335,8 @@ class UnitBlock(BaseBlock):
             torch.Tensor: The output tensor.
         """
         x = self.layers["affine"](x)
+        if "dropout" in self.layers:
+            x = self.layers["dropout"](x)
         x = self.layers["skip"](x)
 
         return x
@@ -459,6 +462,7 @@ class RecurrentBlock(BaseBlock):
         activation: nn.Module | Callable = torch.tanh,
         *,
         activation_params: dict = None,
+        dropout: float = 0.0,
         dtype: torch.dtype = torch.float32,
     ):
 
@@ -470,6 +474,7 @@ class RecurrentBlock(BaseBlock):
         self.bias: bool = bias
         self.activation: nn.Module | Callable = activation
         self.activation_params: dict[str, float] = activation_params or {}
+        self.dropout: float = dropout
         self.dtype: torch.dtype = dtype
         self.state_dim = (output_dim + 1) // 2
 
@@ -484,6 +489,7 @@ class RecurrentBlock(BaseBlock):
             bias=self.bias,
             activation=self.activation,
             activation_params=self.activation_params,
+            dropout=getattr(self, "dropout", 0.0),
             dtype=self.dtype,
         )
         atten_ = partial(
@@ -528,32 +534,28 @@ class RecurrentBlock(BaseBlock):
 
         prev_state = self.cur_state_
         if prev_state is None:
-            self.cur_state_ = torch.empty(
-                (x.shape[0], s_dim * r_dim, *x.shape[2:]), dtype=x.dtype
+            prev_state = torch.zeros(
+                (x.shape[0], s_dim * r_dim, *x.shape[2:]),
+                dtype=x.dtype, device=x.device
             )
-            prev_state = torch.zeros_like(self.cur_state_)
 
-        self.prev_state_ = prev_state.detach()
+        self.prev_state_ = prev_state
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         Applies the recurrent block transformations.
-
-        Args:
-            x (torch.Tensor): The input tensor.
-
-        Returns:
-            torch.Tensor: The output tensor.
         """
         s_dim = self.state_dim
 
         h = self.layers["backward_"](self.prev_state_)
         x = torch.cat([x, h], dim=1)
 
+        state_parts = []
         for i, layer in enumerate(self.layers["forward_"]):
             x = layer(x)
-            self.cur_state_[:, i * s_dim : (i + 1) * s_dim] = x[:, :s_dim]
+            state_parts.append(x[:, :s_dim])
 
+        self.cur_state_ = torch.cat(state_parts, dim=1)
         return x
 
 
@@ -574,6 +576,7 @@ class Network(nn.Module):
             Defaults to torch.tanh.
         activation_params (dict, optional): Additional parameters for the activation
             function. Defaults to None.
+        dropout (float, optional): Dropout probability. Defaults to 0.0.
         collapse_output (bool, optional): Whether to collapse the output dimensions.
             Defaults to True.
         dtype (torch.dtype, optional): Data type for the network parameters.
@@ -591,6 +594,7 @@ class Network(nn.Module):
         activation: nn.Module | Callable = torch.tanh,
         *,
         activation_params: dict = None,
+        dropout: float = 0.0,
         collapse_output: bool = True,
         dtype: torch.dtype = torch.float32,
     ):
@@ -606,10 +610,13 @@ class Network(nn.Module):
         self.inner_block = inner_block
         self.activation = activation
         self.activation_params = activation_params or {}
+        self.dropout = dropout
         self.collapse_output = collapse_output
         self.dtype = dtype
 
-        inner_block = partial(inner_block, inner_module=inner_module, dtype=dtype)
+        inner_block = partial(
+            inner_block, inner_module=inner_module, dropout=dropout, dtype=dtype
+        )
         layers = {
             "input": inner_block(input_dim, hidden_dim),
             "hidden": nn.ModuleList(
@@ -621,7 +628,7 @@ class Network(nn.Module):
                     for task_dim in output_dim
                 ]
             ),
-            "distrib": inner_module(hidden_dim, 1, bias=False, dtype=dtype),
+            "log_var": inner_module(hidden_dim, 1, bias=False, dtype=dtype),
         }
 
         self.layers = nn.ModuleDict(layers)
@@ -644,14 +651,17 @@ class Network(nn.Module):
             outputs.append(o)
 
         o = torch.cat(outputs, dim=1)
-        d = self.layers["distrib"](x).abs()
 
         if torch.is_complex(o):
             o = o.real
-            d = d.real
 
         if self.collapse_output and (dims := tuple(range(2, len(o.shape)))):
             o = o.mean(dim=dims)
-            d = d.mean(dim=dims)
 
-        return o, d
+        log_var = self.layers["distrib"](x)
+        if torch.is_complex(log_var):
+            log_var = log_var.real
+        if self.collapse_output and (dims := tuple(range(2, len(log_var.shape)))):
+            log_var = log_var.mean(dim=dims)
+
+        return o, log_var
